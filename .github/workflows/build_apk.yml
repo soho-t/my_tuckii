@@ -13,19 +13,11 @@ jobs:
         with:
           flutter-version: '3.24.0'
           channel: 'stable'
-      # 雲端自動補齊 android/ 等原生平台資料夾，無需本機執行 flutter create
       - run: flutter create . --platforms=android
-      # 寫入自訂的 AndroidManifest.xml (覆蓋 flutter create 產生的預設檔)
       - run: cp custom_AndroidManifest.xml android/app/src/main/AndroidManifest.xml
-      # 將 minSdk 調整為 24 以相容圖片壓縮與分享套件
       - run: |
-          if [ -f android/app/build.gradle ]; then
-            sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 24/g' android/app/build.gradle
-            sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 24/g' android/app/build.gradle
-          elif [ -f android/app/build.gradle.kts ]; then
-            sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 24/g' android/app/build.gradle.kts
-          fi
-      - run: sed -i 's/id "org.jetbrains.kotlin.android" version "["]*"/id "org.jetbrains.kotlin.android" version "2.1.0"/g' android/settings.gradle*
+          python3 -c 'import re, glob; [open(f,"w").write(re.sub(r"(id\s+[\x22\x27]org\.jetbrains\.kotlin\.android[\x22\x27]\s+version\s+[\x22\x27])[^\x22\x27]+", r"\g<1>2.1.0", re.sub(r"minSdk\s*=\s*flutter\.minSdkVersion", "minSdk = 24", open(f).read()))) for f in glob.glob("android/**/*gradle*", recursive=True)]'
+          cat android/settings.gradle*
       - run: flutter pub get
       - run: dart run build_runner build --delete-conflicting-outputs
       - run: flutter build apk --release
