@@ -285,8 +285,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   if (items.isEmpty) {
                     return const Center(
                       child: Text(
-                        '目前沒有符合的收藏項目
-試著從其他 App 點擊「分享」或按右下角「+ 新增」吧！',
+                        '目前沒有符合的收藏項目\n試著從其他 App 點擊「分享」或按右下角「+ 新增」吧！',
                         textAlign: TextAlign.center,
                         style: TextStyle(color: Colors.grey),
                       ),
