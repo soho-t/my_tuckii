@@ -13,6 +13,7 @@ class BackupService {
 
     final dbFile = File(p.join(docDir.path, 'my_tuckii.sqlite'));
     final screenshotsDir = Directory(p.join(docDir.path, 'screenshots'));
+    final filesDir = Directory(p.join(docDir.path, 'files'));
 
     if (!await dbFile.exists()) {
       throw Exception('找不到資料庫檔案，無法備份');
@@ -31,6 +32,9 @@ class BackupService {
 
     if (await screenshotsDir.exists()) {
       await encoder.addDirectory(screenshotsDir, includeDirName: true);
+    }
+    if (await filesDir.exists()) {
+      await encoder.addDirectory(filesDir, includeDirName: true);
     }
     encoder.close();
 
@@ -69,9 +73,11 @@ class BackupService {
       }
     }
 
-    final screenshotsDir = Directory(p.join(docDir.path, 'screenshots'));
-    if (await screenshotsDir.exists()) {
-      await screenshotsDir.delete(recursive: true);
+    for (final folderName in ['screenshots', 'files']) {
+      final dir = Directory(p.join(docDir.path, folderName));
+      if (await dir.exists()) {
+        await dir.delete(recursive: true);
+      }
     }
 
     for (final file in archive) {

@@ -2,6 +2,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_card_swiper/flutter_card_swiper.dart';
+import 'package:open_filex/open_filex.dart';
+import 'package:path/path.dart' as p;
 import 'package:url_launcher/url_launcher.dart';
 import '../database/app_database.dart';
 
@@ -66,6 +68,8 @@ class _FocusModeScreenState extends State<FocusModeScreen> {
             ),
           ),
         );
+      } else if (item.itemType == 'file' && item.localImagePath != null) {
+        await OpenFilex.open(item.localImagePath!);
       } else if (item.itemType == 'note' && mounted) {
         showDialog(
           context: context,
@@ -197,7 +201,11 @@ class _FocusModeScreenState extends State<FocusModeScreen> {
   Widget _buildSwipeCard(SavedItem item) {
     final isImage = item.itemType == 'image';
     final isNote = item.itemType == 'note';
-    final hasLocalFile = item.localImagePath != null && File(item.localImagePath!).existsSync();
+    final isFile = item.itemType == 'file';
+    final hasLocalImage = isImage && item.localImagePath != null && File(item.localImagePath!).existsSync();
+    final ext = item.localImagePath != null
+        ? p.extension(item.localImagePath!).replaceAll('.', '').toUpperCase()
+        : 'FILE';
 
     return Card(
       elevation: 6,
@@ -208,7 +216,7 @@ class _FocusModeScreenState extends State<FocusModeScreen> {
         children: [
           Expanded(
             flex: 3,
-            child: hasLocalFile
+            child: hasLocalImage
                 ? Image.file(File(item.localImagePath!), fit: BoxFit.cover)
                 : isNote
                     ? Container(
@@ -226,14 +234,36 @@ class _FocusModeScreenState extends State<FocusModeScreen> {
                           ),
                         ),
                       )
-                    : Container(
-                        color: Theme.of(context).colorScheme.primaryContainer,
-                        child: Icon(
-                          isImage ? Icons.image : Icons.link,
-                          size: 80,
-                          color: Theme.of(context).colorScheme.onPrimaryContainer,
-                        ),
-                      ),
+                    : isFile
+                        ? Container(
+                            color: Colors.blueGrey.shade50,
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.insert_drive_file_rounded, size: 76, color: Colors.blueGrey.shade700),
+                                const SizedBox(height: 8),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    color: Colors.blueGrey.shade700,
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Text(
+                                    ext.isNotEmpty ? ext : 'DOCUMENT',
+                                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          )
+                        : Container(
+                            color: Theme.of(context).colorScheme.primaryContainer,
+                            child: Icon(
+                              isImage ? Icons.image : Icons.link,
+                              size: 80,
+                              color: Theme.of(context).colorScheme.onPrimaryContainer,
+                            ),
+                          ),
           ),
           Expanded(
             flex: 2,
@@ -265,7 +295,7 @@ class _FocusModeScreenState extends State<FocusModeScreen> {
                   ),
                   Text(
                     item.url ??
-                        '${isNote ? "文字筆記" : "螢幕截圖"} · 儲存於 ${item.createdAt.month}/${item.createdAt.day}',
+                        '${isNote ? "文字筆記" : (isFile ? "本機文件 ($ext)" : "螢幕截圖")} · 儲存於 ${item.createdAt.month}/${item.createdAt.day}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(

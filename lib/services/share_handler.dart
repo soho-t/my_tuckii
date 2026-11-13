@@ -42,6 +42,8 @@ class ShareHandlerService {
         await _handleSharedText(file.path, onSavedCallback);
       } else if (file.type == SharedMediaType.image) {
         await _handleSharedImage(file.path, onSavedCallback);
+      } else {
+        await _handleSharedDocument(file.path, onSavedCallback);
       }
     }
   }
@@ -102,6 +104,36 @@ class ShareHandlerService {
         );
 
     onSavedCallback('已儲存截圖');
+  }
+
+  /// 將任意分享檔案複製到 App 內部的 files/ 目錄永久保存
+  Future<void> _handleSharedDocument(String tempFilePath, Function(String) onSavedCallback) async {
+    final sourceFile = File(tempFilePath);
+    if (!await sourceFile.exists()) return;
+
+    final appDir = await getApplicationDocumentsDirectory();
+    final filesDir = Directory(p.join(appDir.path, 'files'));
+    if (!await filesDir.exists()) {
+      await filesDir.create(recursive: true);
+    }
+
+    final originalName = p.basename(tempFilePath);
+    final ext = p.extension(originalName).replaceAll('.', '').toUpperCase();
+    final savedFileName = '${DateTime.now().millisecondsSinceEpoch}_$originalName';
+    final targetPath = p.join(filesDir.path, savedFileName);
+
+    await sourceFile.copy(targetPath);
+
+    await db.into(db.savedItems).insert(
+          SavedItemsCompanion.insert(
+            itemType: 'file',
+            title: Value(originalName),
+            tags: Value(ext.isNotEmpty ? ext : 'FILE'),
+            localImagePath: Value(targetPath), // 沿用本機路徑欄位儲存文件實體位置
+          ),
+        );
+
+    onSavedCallback('已儲存檔案：$originalName');
   }
 
   void dispose() {

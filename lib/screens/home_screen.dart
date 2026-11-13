@@ -1,8 +1,12 @@
 import 'dart:io';
 import 'package:drift/drift.dart' as drift;
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:metadata_fetch/metadata_fetch.dart';
+import 'package:open_filex/open_filex.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../database/app_database.dart';
 import '../main.dart';
@@ -94,6 +98,8 @@ class _HomeScreenState extends State<HomeScreen> {
         condition = condition & t.itemType.equals('link');
       } else if (_selectedFilter == 'image') {
         condition = condition & t.itemType.equals('image');
+      } else if (_selectedFilter == 'file') {
+        condition = condition & t.itemType.equals('file');
       } else if (_selectedFilter == 'note') {
         condition = condition & t.itemType.equals('note');
       } else if (_selectedFilter == 'unread') {
@@ -212,6 +218,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   _buildFilterChip('全部類型', 'all'),
                   const SizedBox(width: 8),
                   _buildFilterChip('未讀項目', 'unread'),
+                  const SizedBox(width: 8),
+                  _buildFilterChip('本機文件', 'file'),
                   const SizedBox(width: 8),
                   _buildFilterChip('螢幕截圖', 'image'),
                   const SizedBox(width: 8),
@@ -361,7 +369,7 @@ class _HomeScreenState extends State<HomeScreen> {
             context: context,
             builder: (ctx) => AlertDialog(
               title: const Text('確定要還原備份？'),
-              content: const Text('還原將會覆蓋目前手機上的所有書籤與截圖，此操作無法復原。'),
+              content: const Text('還原將會覆蓋目前手機上的所有書籤、截圖與文件，此操作無法復原。'),
               actions: [
                 TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
                 FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('選取備份檔')),
@@ -449,8 +457,12 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildItemCard(SavedItem item) {
     final isImage = item.itemType == 'image';
     final isNote = item.itemType == 'note';
-    final hasLocalFile = item.localImagePath != null && File(item.localImagePath!).existsSync();
+    final isFile = item.itemType == 'file';
+    final hasLocalImage = isImage && item.localImagePath != null && File(item.localImagePath!).existsSync();
     final isSelected = _selectedIds.contains(item.id);
+    final ext = item.localImagePath != null
+        ? p.extension(item.localImagePath!).replaceAll('.', '').toUpperCase()
+        : 'FILE';
 
     return Card(
       clipBehavior: Clip.antiAlias,
@@ -480,7 +492,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: Stack(
                     fit: StackFit.expand,
                     children: [
-                      if (hasLocalFile)
+                      if (hasLocalImage)
                         Image.file(
                           File(item.localImagePath!),
                           fit: BoxFit.cover,
@@ -500,6 +512,32 @@ class _HomeScreenState extends State<HomeScreen> {
                               height: 1.4,
                               color: Theme.of(context).colorScheme.onTertiaryContainer,
                             ),
+                          ),
+                        )
+                      else if (isFile)
+                        Container(
+                          color: Colors.blueGrey.shade50,
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.description_rounded, size: 42, color: Colors.blueGrey.shade700),
+                              const SizedBox(height: 4),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: Colors.blueGrey.shade700,
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Text(
+                                  ext.isNotEmpty ? ext : 'FILE',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         )
                       else
@@ -535,7 +573,9 @@ class _HomeScreenState extends State<HomeScreen> {
                             Icon(
                               isImage
                                   ? Icons.screenshot
-                                  : (isNote ? Icons.sticky_note_2_outlined : Icons.public),
+                                  : (isNote
+                                      ? Icons.sticky_note_2_outlined
+                                      : (isFile ? Icons.attach_file : Icons.public)),
                               size: 12,
                               color: Colors.grey,
                             ),
@@ -544,7 +584,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               child: Text(
                                 item.tags?.isNotEmpty == true
                                     ? '#${item.tags}'
-                                    : (item.url ?? (isNote ? '文字筆記' : '本機截圖')),
+                                    : (item.url ?? (isNote ? '文字筆記' : (isFile ? '本機文件' : '本機截圖'))),
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(fontSize: 11, color: Colors.grey),
@@ -627,6 +667,13 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
       );
+    } else if (item.itemType == 'file' && item.localImagePath != null) {
+      final result = await OpenFilex.open(item.localImagePath!);
+      if (result.type != ResultType.done && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('無法開啟此檔案（手機可能未安裝對應的閱讀器）：${result.message}')),
+        );
+      }
     } else if (item.itemType == 'note') {
       showDialog(
         context: context,
@@ -745,7 +792,7 @@ class _HomeScreenState extends State<HomeScreen> {
               TextField(
                 controller: tagsCtrl,
                 decoration: const InputDecoration(
-                  labelText: '標籤 (方便搜尋，如：美食, 台北)',
+                  labelText: '標籤 (方便搜尋，如：合約, 報表)',
                   border: OutlineInputBorder(),
                 ),
               ),
@@ -778,6 +825,44 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  /// 從手機挑選任意檔案（PDF/Office）並複製存入 App 專屬目錄
+  Future<void> _pickAndSaveLocalFile(int? targetCollectionId, String customTags) async {
+    final result = await FilePicker.platform.pickFiles(allowMultiple: false);
+    if (result == null || result.files.single.path == null) return;
+
+    final sourceFile = File(result.files.single.path!);
+    final originalName = result.files.single.name;
+    final ext = p.extension(originalName).replaceAll('.', '').toUpperCase();
+
+    final appDir = await getApplicationDocumentsDirectory();
+    final filesDir = Directory(p.join(appDir.path, 'files'));
+    if (!await filesDir.exists()) {
+      await filesDir.create(recursive: true);
+    }
+
+    final savedFileName = '${DateTime.now().millisecondsSinceEpoch}_$originalName';
+    final targetPath = p.join(filesDir.path, savedFileName);
+    await sourceFile.copy(targetPath);
+
+    final finalTags = customTags.isNotEmpty ? customTags : (ext.isNotEmpty ? ext : 'FILE');
+
+    await widget.db.into(widget.db.savedItems).insert(
+          SavedItemsCompanion.insert(
+            itemType: 'file',
+            title: drift.Value(originalName),
+            tags: drift.Value(finalTags),
+            localImagePath: drift.Value(targetPath),
+            collectionId: drift.Value(targetCollectionId),
+          ),
+        );
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('已將檔案「$originalName」存入收藏庫')),
+      );
+    }
+  }
+
   Future<void> _showQuickAddBottomSheet() async {
     final contentCtrl = TextEditingController();
     final titleCtrl = TextEditingController();
@@ -804,7 +889,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   const Text(
-                    '隨手記一筆 / 貼上網址',
+                    '隨手新增項目',
                     style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                   ),
                   TextButton.icon(
@@ -819,14 +904,43 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ],
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 8),
+
+              // 新增：直接選取手機本機檔案按鈕
+              OutlinedButton.icon(
+                onPressed: () async {
+                  final colId = selectedColId;
+                  final tags = tagsCtrl.text.trim();
+                  Navigator.pop(ctx);
+                  await _pickAndSaveLocalFile(colId, tags);
+                },
+                icon: const Icon(Icons.upload_file),
+                label: const Text('選取手機檔案 (PDF / Word / Excel / 任意格式)'),
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                ),
+              ),
+
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 10),
+                child: Row(
+                  children: [
+                    Expanded(child: Divider()),
+                    Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 12),
+                      child: Text('或輸入網址 / 文字筆記', style: TextStyle(color: Colors.grey, fontSize: 12)),
+                    ),
+                    Expanded(child: Divider()),
+                  ],
+                ),
+              ),
+
               TextField(
                 controller: contentCtrl,
-                autofocus: true,
                 maxLines: 3,
                 minLines: 1,
                 decoration: const InputDecoration(
-                  labelText: '網址或靈感筆記內容 *',
+                  labelText: '網址或靈感筆記內容',
                   hintText: '貼上 https://... 連結，或直接輸入文字筆記',
                   border: OutlineInputBorder(),
                 ),
@@ -866,7 +980,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       controller: tagsCtrl,
                       decoration: const InputDecoration(
                         labelText: '標籤 (選填)',
-                        hintText: '靈感, 待辦',
+                        hintText: '合約, 報表',
                         border: OutlineInputBorder(),
                       ),
                     ),
@@ -951,7 +1065,7 @@ class _HomeScreenState extends State<HomeScreen> {
           controller: nameCtrl,
           autofocus: true,
           decoration: const InputDecoration(
-            hintText: '例如：旅遊靈感、必吃美食、工作參考',
+            hintText: '例如：旅遊靈感、必吃美食、工作文件',
             border: OutlineInputBorder(),
           ),
         ),
@@ -978,7 +1092,7 @@ class _HomeScreenState extends State<HomeScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text('刪除「${col.name}」？'),
-        content: const Text('刪除資料夾不會刪掉裡面的書籤或截圖，它們會自動移回「未分類」。'),
+        content: const Text('刪除資料夾不會刪掉裡面的項目，它們會自動移回「未分類」。'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
           FilledButton(
@@ -1045,7 +1159,7 @@ class _HomeScreenState extends State<HomeScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text('刪除這 $count 個項目？'),
-        content: const Text('刪除後將一併移除本機截圖檔案，且無法復原。'),
+        content: const Text('刪除後將一併移除本機截圖與文件檔案，且無法復原。'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
           FilledButton(
