@@ -3,7 +3,7 @@ import os, re, glob, shutil
 PACKAGE_NAME = "io.github.sohot.mytuckii"
 PACKAGE_PATH = "android/app/src/main/kotlin/io/github/sohot/mytuckii"
 
-# 0. 修正 MainActivity.kt 實體資料夾路徑與 package 宣告，解決 ClassNotFoundException
+# 0. 修正 MainActivity.kt 實體資料夾路徑與 package 宣告
 kotlin_root = "android/app/src/main/kotlin"
 if os.path.exists(kotlin_root):
     shutil.rmtree(kotlin_root)
@@ -32,7 +32,7 @@ try:
 except FileNotFoundError:
     pass
 
-# 3. 更新 app/build.gradle：替換 namespace、applicationId、minSdk=24、NDK 與正式簽署配置
+# 3. 更新 app/build.gradle：注入 signingConfigs.release 並強制替換 signingConfigs.debug
 for f in glob.glob("android/app/build.gradle*"):
     s = open(f, encoding="utf-8").read()
     s = re.sub(r'namespace\s*=?\s*["\'][^"\']+["\']', f'namespace = "{PACKAGE_NAME}"', s)
@@ -43,17 +43,14 @@ for f in glob.glob("android/app/build.gradle*"):
     s = s.replace('JavaVersion.VERSION_1_8', 'JavaVersion.VERSION_17')
     s = re.sub(r'jvmTarget\s*=\s*["\']1\.8["\']', 'jvmTarget = "17"', s)
 
-    signing_header = '''
+    signing_setup = '''
 def keystoreProperties = new Properties()
 def keystorePropertiesFile = rootProject.file('key.properties')
 if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
 }
 
-android {'''
-    s = re.sub(r'android\s*\{', signing_header.strip(), s, count=1)
-
-    signing_block = '''
+android {
     signingConfigs {
         release {
             keyAlias keystoreProperties['keyAlias']
@@ -61,16 +58,9 @@ android {'''
             storeFile keystoreProperties['storeFile'] ? file(keystoreProperties['storeFile']) : null
             storePassword keystoreProperties['storePassword']
         }
-    }
-    buildTypes {
-        release {
-            signingConfig signingConfigs.release
-'''
-    s = re.sub(
-        r'buildTypes\s*\{\s*release\s*\{\s*signingConfig\s+signingConfigs\.debug',
-        signing_block.strip(),
-        s
-    )
+    }'''
+    s = re.sub(r'android\s*\{', signing_setup.strip(), s, count=1)
+    s = re.sub(r'signingConfig\s*=?\s*signingConfigs\.debug', 'signingConfig = signingConfigs.release', s)
     open(f, "w", encoding="utf-8").write(s)
 
 # 4. 強制所有第三方套件統一使用 JVM 17
@@ -98,4 +88,4 @@ subprojects {
 except FileNotFoundError:
     pass
 
-print("MainActivity.kt & Gradle signing block patched successfully!")
+print("Release signingConfig forced successfully!")
