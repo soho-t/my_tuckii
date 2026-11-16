@@ -28,7 +28,12 @@ jobs:
       - run: flutter pub get
       - run: dart run build_runner build --delete-conflicting-outputs
       - run: flutter build apk --release
+      - name: Extract Version and Rename APK
+        run: |
+          APP_VER=$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d'+' -f1)
+          echo "APP_VER=$APP_VER" >> $GITHUB_ENV
+          cp build/app/outputs/flutter-apk/app-release.apk "隨手存_v${APP_VER}.apk"
       - uses: actions/upload-artifact@v4
         with:
-          name: release-apk
-          path: build/app/outputs/flutter-apk/app-release.apk
+          name: 隨手存_v${{ env.APP_VER }}
+          path: 隨手存_v${{ env.APP_VER }}.apk
