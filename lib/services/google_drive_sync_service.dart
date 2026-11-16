@@ -1,16 +1,33 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:drift/drift.dart' as drift;
-import 'package:extension_google_sign_in_as_googleapis_auth/extension_google_sign_in_as_googleapis_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:googleapis/drive/v3.dart' as drive;
+import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import '../database/app_database.dart';
 
+class _GoogleAuthClient extends http.BaseClient {
+  final Map<String, String> _headers;
+  final http.Client _client = http.Client();
+  _GoogleAuthClient(this._headers);
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) {
+    return _client.send(request..headers.addAll(_headers));
+  }
+
+  @override
+  void close() {
+    _client.close();
+  }
+}
+
 class GoogleDriveSyncService {
   static final GoogleSignIn _googleSignIn = GoogleSignIn(
-serverClientId:'426482376122-d67pj2oc5r92duld51f9k7kb35no37rp.apps.googleusercontent.com',    scopes: [drive.DriveApi.driveAppdataScope],
+    serverClientId: '426482376122-d67pj2oc5r92duld51f9k7kb35no37rp.apps.googleusercontent.com',
+    scopes: [drive.DriveApi.driveAppdataScope],
   );
 
   static GoogleSignInAccount? get currentUser => _googleSignIn.currentUser;
@@ -45,10 +62,8 @@ serverClientId:'426482376122-d67pj2oc5r92duld51f9k7kb35no37rp.apps.googleusercon
       throw Exception('已取消 Google 帳號登入');
     }
 
-    final authClient = await _googleSignIn.authenticatedClient();
-    if (authClient == null) {
-      throw Exception('無法取得 Google Drive 授權憑證，請重新登入');
-    }
+    final headers = await account.authHeaders;
+    final authClient = _GoogleAuthClient(headers);
 
     try {
       final driveApi = drive.DriveApi(authClient);
