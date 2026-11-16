@@ -1,6 +1,20 @@
-import re, glob
+import os, re, glob, shutil
 
 PACKAGE_NAME = "io.github.sohot.mytuckii"
+PACKAGE_PATH = "android/app/src/main/kotlin/io/github/sohot/mytuckii"
+
+# 0. 修正 MainActivity.kt 實體資料夾路徑與 package 宣告，解決 ClassNotFoundException
+kotlin_root = "android/app/src/main/kotlin"
+if os.path.exists(kotlin_root):
+    shutil.rmtree(kotlin_root)
+os.makedirs(PACKAGE_PATH, exist_ok=True)
+with open(f"{PACKAGE_PATH}/MainActivity.kt", "w", encoding="utf-8") as f:
+    f.write(f"""package {PACKAGE_NAME}
+
+import io.flutter.embedding.android.FlutterActivity
+
+class MainActivity: FlutterActivity()
+""")
 
 # 1. 升級 Kotlin 至 2.1.0 與 Android Gradle Plugin (AGP) 至 8.3.2
 for f in glob.glob("android/settings.gradle*"):
@@ -18,7 +32,7 @@ try:
 except FileNotFoundError:
     pass
 
-# 3. 更新 app/build.gradle：將 key.properties 讀取區塊放在 android { 之前（plugins {} 之後）
+# 3. 更新 app/build.gradle：替換 namespace、applicationId、minSdk=24、NDK 與正式簽署配置
 for f in glob.glob("android/app/build.gradle*"):
     s = open(f, encoding="utf-8").read()
     s = re.sub(r'namespace\s*=?\s*["\'][^"\']+["\']', f'namespace = "{PACKAGE_NAME}"', s)
@@ -84,4 +98,4 @@ subprojects {
 except FileNotFoundError:
     pass
 
-print("Gradle signing block placed after plugins {} successfully!")
+print("MainActivity.kt & Gradle signing block patched successfully!")
