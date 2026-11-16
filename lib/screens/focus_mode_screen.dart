@@ -104,11 +104,7 @@ class _FocusModeScreenState extends State<FocusModeScreen> {
     } else if (direction == CardSwiperDirection.left) {
       await widget.db.markAsRead(item.id);
     } else if (direction == CardSwiperDirection.top) {
-      if (item.localImagePath != null) {
-        final file = File(item.localImagePath!);
-        if (await file.exists()) await file.delete();
-      }
-      await (widget.db.delete(widget.db.savedItems)..where((t) => t.id.equals(item.id))).go();
+      await widget.db.softDeleteItem(item);
     }
 
     return true;

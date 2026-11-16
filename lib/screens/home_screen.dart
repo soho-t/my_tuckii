@@ -12,6 +12,7 @@ import '../database/app_database.dart';
 import '../main.dart';
 import '../services/backup_service.dart';
 import '../services/bookmark_importer.dart';
+import '../services/google_drive_sync_service.dart';
 import '../services/share_handler.dart';
 import 'focus_mode_screen.dart';
 
@@ -30,6 +31,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String _searchQuery = '';
   String _selectedFilter = 'all';
   int? _selectedCollectionId;
+  bool _isSyncing = false;
 
   final Set<int> _selectedIds = {};
   List<SavedItem> _currentItems = [];
@@ -38,6 +40,10 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    GoogleDriveSyncService.signInSilently().then((_) {
+      if (mounted) setState(() {});
+    });
+
     _shareHandler = ShareHandlerService(widget.db);
     _shareHandler.init((message) {
       if (!mounted) return;
@@ -56,6 +62,35 @@ class _HomeScreenState extends State<HomeScreen> {
     _shareHandler.dispose();
     _searchController.dispose();
     super.dispose();
+  }
+
+  Future<void> _handleGoogleSync() async {
+    if (_isSyncing) return;
+    setState(() => _isSyncing = true);
+
+    try {
+      final resultMsg = await GoogleDriveSyncService.syncNow(widget.db);
+      if (mounted) {
+        setState(() {});
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(resultMsg),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('同步失敗：$e'),
+            backgroundColor: Colors.red.shade700,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isSyncing = false);
+    }
   }
 
   void _toggleSelection(int id) {
@@ -84,7 +119,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final query = widget.db.select(widget.db.savedItems);
 
     query.where((t) {
-      drift.Expression<bool> condition = const drift.Constant(true);
+      drift.Expression<bool> condition = t.isDeleted.equals(false);
 
       if (_selectedCollectionId != null) {
         if (_selectedCollectionId == -1) {
@@ -127,6 +162,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final googleUser = GoogleDriveSyncService.currentUser;
+
     return PopScope(
       canPop: !_isSelectionMode,
       onPopInvokedWithResult: (didPop, result) {
@@ -162,6 +199,27 @@ class _HomeScreenState extends State<HomeScreen> {
             : AppBar(
                 title: const Text('我的收藏庫', style: TextStyle(fontWeight: FontWeight.bold)),
                 actions: [
+                  // Google 帳號雲端增量同步按鈕
+                  _isSyncing
+                      ? const Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 12),
+                          child: SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        )
+                      : IconButton(
+                          icon: Icon(
+                            googleUser != null ? Icons.cloud_done : Icons.cloud_sync_outlined,
+                            color: googleUser != null ? Colors.green : null,
+                          ),
+                          tooltip: googleUser != null
+                              ? '點擊同步 (${googleUser.email})'
+                              : '綁定 Google 帳號雲端同步',
+                          onPressed: _handleGoogleSync,
+                        ),
+
                   StreamBuilder<List<SavedItem>>(
                     stream: widget.db.watchUnreadItems(),
                     builder: (context, snapshot) {
@@ -176,7 +234,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           );
                         },
                         icon: const Icon(Icons.style_rounded, size: 18),
-                        label: Text('專注複習 ($unreadCount)'),
+                        label: Text('複習 ($unreadCount)'),
                       );
                     },
                   ),
@@ -353,10 +411,22 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildMoreMenuButton() {
+    final googleUser = GoogleDriveSyncService.currentUser;
+
     return PopupMenuButton<String>(
       icon: const Icon(Icons.more_vert),
       onSelected: (value) async {
-        if (value == 'export') {
+        if (value == 'google_sync') {
+          await _handleGoogleSync();
+        } else if (value == 'google_signout') {
+          await GoogleDriveSyncService.signOut();
+          if (mounted) {
+            setState(() {});
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('已解除 Google 帳號同步綁定')),
+            );
+          }
+        } else if (value == 'export') {
           try {
             await BackupService.exportBackup(widget.db);
           } catch (e) {
@@ -418,6 +488,25 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       },
       itemBuilder: (context) => [
+        PopupMenuItem(
+          value: 'google_sync',
+          child: ListTile(
+            leading: const Icon(Icons.sync, color: Colors.blue),
+            title: Text(googleUser != null ? '立即同步至 Google Drive' : '綁定 Google 帳號同步'),
+            subtitle: googleUser != null ? Text(googleUser.email, style: const TextStyle(fontSize: 11)) : null,
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+        if (googleUser != null)
+          const PopupMenuItem(
+            value: 'google_signout',
+            child: ListTile(
+              leading: Icon(Icons.logout, color: Colors.orange),
+              title: Text('解除 Google 帳號綁定'),
+              contentPadding: EdgeInsets.zero,
+            ),
+          ),
+        const PopupMenuDivider(),
         const PopupMenuItem(
           value: 'import_html',
           child: ListTile(
@@ -429,8 +518,8 @@ class _HomeScreenState extends State<HomeScreen> {
         const PopupMenuItem(
           value: 'export',
           child: ListTile(
-            leading: Icon(Icons.cloud_upload_outlined),
-            title: Text('匯出 ZIP 備份包'),
+            leading: Icon(Icons.archive_outlined),
+            title: Text('匯出離線 ZIP 備份包'),
             contentPadding: EdgeInsets.zero,
           ),
         ),
@@ -438,7 +527,7 @@ class _HomeScreenState extends State<HomeScreen> {
           value: 'import',
           child: ListTile(
             leading: Icon(Icons.restore_page_outlined),
-            title: Text('從 ZIP 備份還原'),
+            title: Text('從離線 ZIP 備份還原'),
             contentPadding: EdgeInsets.zero,
           ),
         ),
@@ -544,7 +633,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         Container(
                           color: Theme.of(context).colorScheme.secondaryContainer,
                           child: Icon(
-                            isImage ? Icons.image_not_supported : Icons.link_rounded,
+                            isImage ? Icons.cloud_download_outlined : Icons.link_rounded,
                             size: 40,
                             color: Theme.of(context).colorScheme.onSecondaryContainer,
                           ),
@@ -641,6 +730,12 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!mounted) return;
 
     if (item.itemType == 'image' && item.localImagePath != null) {
+      if (!File(item.localImagePath!).existsSync()) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('本機尚未下載此圖檔，請點擊上方雲端同步按鈕下載')),
+        );
+        return;
+      }
       Navigator.push(
         context,
         MaterialPageRoute(
@@ -668,10 +763,16 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       );
     } else if (item.itemType == 'file' && item.localImagePath != null) {
+      if (!File(item.localImagePath!).existsSync()) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('本機尚未下載此文件，請點擊上方雲端同步按鈕下載')),
+        );
+        return;
+      }
       final result = await OpenFilex.open(item.localImagePath!);
       if (result.type != ResultType.done && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('無法開啟此檔案（手機可能未安裝對應的閱讀器）：${result.message}')),
+          SnackBar(content: Text('無法開啟此檔案：${result.message}')),
         );
       }
     } else if (item.itemType == 'note') {
@@ -744,7 +845,10 @@ class _HomeScreenState extends State<HomeScreen> {
                         onPressed: () async {
                           await (widget.db.update(widget.db.savedItems)
                                 ..where((t) => t.id.equals(item.id)))
-                              .write(SavedItemsCompanion(isPinned: drift.Value(!item.isPinned)));
+                              .write(SavedItemsCompanion(
+                            isPinned: drift.Value(!item.isPinned),
+                            updatedAt: drift.Value(DateTime.now()),
+                          ));
                           if (ctx.mounted) Navigator.pop(ctx);
                         },
                       ),
@@ -752,13 +856,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         icon: const Icon(Icons.delete_outline, color: Colors.red),
                         tooltip: '刪除',
                         onPressed: () async {
-                          if (item.localImagePath != null) {
-                            final file = File(item.localImagePath!);
-                            if (await file.exists()) await file.delete();
-                          }
-                          await (widget.db.delete(widget.db.savedItems)
-                                ..where((t) => t.id.equals(item.id)))
-                              .go();
+                          await widget.db.softDeleteItem(item);
                           if (ctx.mounted) Navigator.pop(ctx);
                         },
                       ),
@@ -812,6 +910,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       title: drift.Value(titleCtrl.text.trim()),
                       tags: drift.Value(tagsCtrl.text.trim()),
                       note: drift.Value(noteCtrl.text.trim()),
+                      updatedAt: drift.Value(DateTime.now()),
                     ),
                   );
                   if (ctx.mounted) Navigator.pop(ctx);
@@ -825,7 +924,6 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  /// 從手機挑選任意檔案（PDF/Office）並複製存入 App 專屬目錄
   Future<void> _pickAndSaveLocalFile(int? targetCollectionId, String customTags) async {
     final result = await FilePicker.platform.pickFiles(allowMultiple: false);
     if (result == null || result.files.single.path == null) return;
@@ -906,7 +1004,6 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               const SizedBox(height: 8),
 
-              // 新增：直接選取手機本機檔案按鈕
               OutlinedButton.icon(
                 onPressed: () async {
                   final colId = selectedColId;
@@ -1049,6 +1146,7 @@ class _HomeScreenState extends State<HomeScreen> {
           SavedItemsCompanion(
             title: drift.Value(data.title!.trim()),
             note: drift.Value(data.description?.trim()),
+            updatedAt: drift.Value(DateTime.now()),
           ),
         );
       }
@@ -1159,7 +1257,7 @@ class _HomeScreenState extends State<HomeScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text('刪除這 $count 個項目？'),
-        content: const Text('刪除後將一併移除本機截圖與文件檔案，且無法復原。'),
+        content: const Text('刪除後將一併移除本機截圖與文件檔案，且雲端同步時也會一併移除。'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
           FilledButton(
