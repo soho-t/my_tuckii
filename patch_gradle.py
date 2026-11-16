@@ -18,7 +18,7 @@ try:
 except FileNotFoundError:
     pass
 
-# 3. 更新 app/build.gradle：替換 namespace、applicationId、minSdk=24、NDK 與正式簽署配置
+# 3. 更新 app/build.gradle：將 key.properties 讀取區塊放在 android { 之前（plugins {} 之後）
 for f in glob.glob("android/app/build.gradle*"):
     s = open(f, encoding="utf-8").read()
     s = re.sub(r'namespace\s*=?\s*["\'][^"\']+["\']', f'namespace = "{PACKAGE_NAME}"', s)
@@ -29,15 +29,15 @@ for f in glob.glob("android/app/build.gradle*"):
     s = s.replace('JavaVersion.VERSION_1_8', 'JavaVersion.VERSION_17')
     s = re.sub(r'jvmTarget\s*=\s*["\']1\.8["\']', 'jvmTarget = "17"', s)
 
-    # 注入 key.properties 讀取與 release signingConfig
     signing_header = '''
 def keystoreProperties = new Properties()
 def keystorePropertiesFile = rootProject.file('key.properties')
 if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
 }
-'''
-    s = signing_header + "\n" + s
+
+android {'''
+    s = re.sub(r'android\s*\{', signing_header.strip(), s, count=1)
 
     signing_block = '''
     signingConfigs {
@@ -84,4 +84,4 @@ subprojects {
 except FileNotFoundError:
     pass
 
-print("Package ID io.github.sohot.mytuckii & Release Signing patched successfully!")
+print("Gradle signing block placed after plugins {} successfully!")
