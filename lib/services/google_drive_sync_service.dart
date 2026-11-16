@@ -10,6 +10,7 @@ import '../database/app_database.dart';
 
 class GoogleDriveSyncService {
   static final GoogleSignIn _googleSignIn = GoogleSignIn(
+  serverClientId: '426482376122-d67pj2oc5r92duld51f9k7kb35no37rp.apps.googleusercontent.com',
     scopes: [drive.DriveApi.driveAppdataScope],
   );
 
