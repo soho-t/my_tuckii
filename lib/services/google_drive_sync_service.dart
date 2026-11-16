@@ -6,6 +6,7 @@ import 'package:googleapis/drive/v3.dart' as drive;
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../database/app_database.dart';
 
 class _GoogleAuthClient extends http.BaseClient {
@@ -25,38 +26,79 @@ class _GoogleAuthClient extends http.BaseClient {
 }
 
 class GoogleDriveSyncService {
+  static const String _boundPrefKey = 'is_google_drive_bound';
+
   static final GoogleSignIn _googleSignIn = GoogleSignIn(
     serverClientId: '426482376122-d67pj2oc5r92duld51f9k7kb35no37rp.apps.googleusercontent.com',
     scopes: [drive.DriveApi.driveAppdataScope],
   );
 
-  static GoogleSignInAccount? get currentUser => _googleSignIn.currentUser;
+  static bool _isBoundCache = false;
 
-  /// 嘗試靜默登入已綁定的帳號
+  static GoogleSignInAccount? get currentUser =>
+      _isBoundCache ? _googleSignIn.currentUser : null;
+
+  /// App 啟動時呼叫：檢查本機是否曾主動綁定過
+  /// - 全新安裝預設為 false -> 直接回傳 null，絕不自動登入任何帳號
+  /// - 已綁定過為 true -> 自動恢復已綁定帳號，重啟免重新登入
   static Future<GoogleSignInAccount?> signInSilently() async {
     try {
-      return await _googleSignIn.signInSilently();
+      final prefs = await SharedPreferences.getInstance();
+      _isBoundCache = prefs.getBool(_boundPrefKey) ?? false;
+      if (!_isBoundCache) {
+        return null;
+      }
+      final account = await _googleSignIn.signInSilently();
+      if (account == null) {
+        _isBoundCache = false;
+        await prefs.setBool(_boundPrefKey, false);
+      }
+      return account;
     } catch (_) {
       return null;
     }
   }
 
-  /// 跳出 Google 帳號選擇視窗進行綁定
+  /// 使用者主動點擊雲端按鈕綁定時呼叫：先清除快取確保彈出 Google 帳號選擇視窗
   static Future<GoogleSignInAccount?> signIn() async {
-    return await _googleSignIn.signIn();
+    try {
+      await _googleSignIn.signOut();
+    } catch (_) {}
+
+    final account = await _googleSignIn.signIn();
+    if (account != null) {
+      _isBoundCache = true;
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_boundPrefKey, true);
+    }
+    return account;
   }
 
+  /// 解除綁定並清除本機與 Google 授權快取
   static Future<void> signOut() async {
-    await _googleSignIn.disconnect();
+    _isBoundCache = false;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_boundPrefKey, false);
+    try {
+      await _googleSignIn.disconnect();
+    } catch (_) {
+      await _googleSignIn.signOut();
+    }
   }
 
   /// 執行秒級增量差異同步：
   /// 1. 合併輕量 sync_index.json（僅幾 KB）
   /// 2. 僅上傳新增的本地截圖/文件，僅下載缺失的雲端截圖/文件
   static Future<String> syncNow(AppDatabase db) async {
-    GoogleSignInAccount? account = _googleSignIn.currentUser;
-    account ??= await _googleSignIn.signInSilently();
-    account ??= await _googleSignIn.signIn();
+    final prefs = await SharedPreferences.getInstance();
+    _isBoundCache = prefs.getBool(_boundPrefKey) ?? false;
+
+    GoogleSignInAccount? account;
+    if (_isBoundCache) {
+      account = _googleSignIn.currentUser ?? await _googleSignIn.signInSilently();
+    }
+    // 若尚未綁定（或授權已過期），強制呼叫 signIn() 彈出帳號選擇視窗
+    account ??= await signIn();
 
     if (account == null) {
       throw Exception('已取消 Google 帳號登入');
@@ -112,7 +154,6 @@ class GoogleDriveSyncService {
         final actualLocalFile = File(item.localImagePath!);
 
         if (await actualLocalFile.exists() && !remoteByName.containsKey(fileName)) {
-          // 本機有、雲端沒有 -> 上傳這一個新檔案
           final driveMeta = drive.File()
             ..name = fileName
             ..parents = ['appDataFolder'];
@@ -122,7 +163,6 @@ class GoogleDriveSyncService {
           );
           uploadedCount++;
         } else if (!await expectedLocalFile.exists() && remoteByName.containsKey(fileName)) {
-          // 雲端有、本機沒有 -> 下載這一個新檔案
           final rFile = remoteByName[fileName]!;
           if (rFile.id != null) {
             await expectedLocalFile.parent.create(recursive: true);
@@ -134,7 +174,6 @@ class GoogleDriveSyncService {
             await media.stream.pipe(sink);
             await sink.close();
 
-            // 更新本機資料庫路徑指向新下載的檔案
             await (db.update(db.savedItems)..where((t) => t.id.equals(item.id))).write(
               SavedItemsCompanion(localImagePath: drift.Value(expectedLocalFile.path)),
             );
@@ -247,7 +286,6 @@ class GoogleDriveSyncService {
       }
     }
 
-    // 重新建立最新的 collectionUuid -> localId 對照表
     final updatedCols = await db.select(db.collections).get();
     final Map<String, int> uuidToColId = {for (var c in updatedCols) c.syncUuid: c.id};
 
