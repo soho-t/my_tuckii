@@ -15,15 +15,26 @@ jobs:
           channel: 'stable'
       - run: flutter create . --platforms=android --org io.github.sohot
       - run: cp custom_AndroidManifest.xml android/app/src/main/AndroidManifest.xml
-      - name: Decode Keystore and Create key.properties
+      - name: Decode Keystore and Print SHA-1
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
         run: |
-          echo "$KEYSTORE_BASE64" | base64 -di > android/app/upload-keystore.jks
-          printf "storePassword=%s\nkeyPassword=%s\nkeyAlias=%s\nstoreFile=upload-keystore.jks\n" "$STORE_PASSWORD" "$KEY_PASSWORD" "$KEY_ALIAS" > android/key.properties
+          ALIAS="${KEY_ALIAS:-upload}"
+          KPASS="${KEY_PASSWORD:-123456}"
+          SPASS="${STORE_PASSWORD:-123456}"
+          CLEAN_B64=$(echo "$KEYSTORE_BASE64" | grep -v 'CERTIFICATE' | tr -d '[:space:]')
+          if [ -n "$CLEAN_B64" ]; then
+            echo "$CLEAN_B64" | base64 -d > android/app/upload-keystore.jks
+          fi
+          printf "storePassword=%s\nkeyPassword=%s\nkeyAlias=%s\nstoreFile=upload-keystore.jks\n" "$SPASS" "$KPASS" "$ALIAS" > android/key.properties
+          APK_SHA1=$(keytool -J-Duser.language=en -list -v -keystore android/app/upload-keystore.jks -alias "$ALIAS" -storepass "$SPASS" | grep -i 'SHA1:' | awk '{print $2}')
+          echo "### 🔑 本支 APK 實際簽署的 SHA-1 指紋" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "$APK_SHA1" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
       - run: python3 patch_gradle.py
       - run: flutter pub get
       - run: dart run build_runner build --delete-conflicting-outputs
