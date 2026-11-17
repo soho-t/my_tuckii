@@ -38,13 +38,19 @@ jobs:
       - run: python3 patch_gradle.py
       - run: flutter pub get
       - run: dart run build_runner build --delete-conflicting-outputs
-      - run: flutter build apk --release
-      - name: Extract Version and Rename APK
+      - name: Build Release APK and AAB with Auto-Incremented Build Number
+        run: |
+          flutter build apk --release --build-number=${{ github.run_number }}
+          flutter build appbundle --release --build-number=${{ github.run_number }}
+      - name: Extract Version and Rename Outputs
         run: |
           APP_VER=$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d'+' -f1)
           echo "APP_VER=$APP_VER" >> $GITHUB_ENV
           cp build/app/outputs/flutter-apk/app-release.apk "隨手存_v${APP_VER}.apk"
+          cp build/app/outputs/bundle/release/app-release.aab "隨手存_v${APP_VER}.aab"
       - uses: actions/upload-artifact@v4
         with:
           name: 隨手存_v${{ env.APP_VER }}
-          path: 隨手存_v${{ env.APP_VER }}.apk
+          path: |
+            隨手存_v${{ env.APP_VER }}.apk
+            隨手存_v${{ env.APP_VER }}.aab
