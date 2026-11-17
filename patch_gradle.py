@@ -63,25 +63,15 @@ android {
     s = re.sub(r'signingConfig\s*=?\s*signingConfigs\.debug', 'signingConfig = signingConfigs.release', s)
     open(f, "w", encoding="utf-8").write(s)
 
-# 4. 強制所有第三方套件的 Java 與 Kotlin 編譯任務統一使用 JVM 17
+# 4. 直接在 Task 層級強制所有子專案的 Java 與 Kotlin 統一使用 JVM 17（不使用 afterEvaluate）
 root_gradle = "android/build.gradle"
 try:
     r = open(root_gradle, encoding="utf-8").read()
     jvm_fix = '''
 subprojects {
-    afterEvaluate { project ->
-        if (project.hasProperty("android")) {
-            project.android {
-                compileOptions {
-                    sourceCompatibility = JavaVersion.VERSION_17
-                    targetCompatibility = JavaVersion.VERSION_17
-                }
-            }
-        }
-    }
     tasks.withType(JavaCompile).configureEach {
-        sourceCompatibility = "17"
-        targetCompatibility = "17"
+        sourceCompatibility = JavaVersion.VERSION_17.toString()
+        targetCompatibility = JavaVersion.VERSION_17.toString()
     }
     tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
         kotlinOptions {
