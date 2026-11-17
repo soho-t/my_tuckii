@@ -63,19 +63,25 @@ android {
     s = re.sub(r'signingConfig\s*=?\s*signingConfigs\.debug', 'signingConfig = signingConfigs.release', s)
     open(f, "w", encoding="utf-8").write(s)
 
-# 4. 強制所有第三方套件統一使用 JVM 17
+# 4. 強制所有第三方套件的 Java 與 Kotlin 編譯任務統一使用 JVM 17
 root_gradle = "android/build.gradle"
 try:
     r = open(root_gradle, encoding="utf-8").read()
     jvm_fix = '''
 subprojects {
-    plugins.withId("com.android.library") {
-        android {
-            compileOptions {
-                sourceCompatibility = JavaVersion.VERSION_17
-                targetCompatibility = JavaVersion.VERSION_17
+    afterEvaluate { project ->
+        if (project.hasProperty("android")) {
+            project.android {
+                compileOptions {
+                    sourceCompatibility = JavaVersion.VERSION_17
+                    targetCompatibility = JavaVersion.VERSION_17
+                }
             }
         }
+    }
+    tasks.withType(JavaCompile).configureEach {
+        sourceCompatibility = "17"
+        targetCompatibility = "17"
     }
     tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
         kotlinOptions {
@@ -88,4 +94,4 @@ subprojects {
 except FileNotFoundError:
     pass
 
-print("Release signingConfig forced successfully!")
+print("Release signingConfig and JVM 17 tasks forced successfully!")
