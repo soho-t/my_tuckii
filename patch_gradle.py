@@ -32,11 +32,13 @@ try:
 except FileNotFoundError:
     pass
 
-# 3. 更新 app/build.gradle：注入 signingConfigs.release 並強制替換 signingConfigs.debug
+# 3. 更新 app/build.gradle：升級 compileSdk 35、注入 signingConfigs.release 並強制替換 signingConfigs.debug
 for f in glob.glob("android/app/build.gradle*"):
     s = open(f, encoding="utf-8").read()
     s = re.sub(r'namespace\s*=?\s*["\'][^"\']+["\']', f'namespace = "{PACKAGE_NAME}"', s)
     s = re.sub(r'applicationId\s*=?\s*["\'][^"\']+["\']', f'applicationId = "{PACKAGE_NAME}"', s)
+    s = re.sub(r'compileSdk\s*=\s*flutter\.compileSdkVersion', 'compileSdk = 35', s)
+    s = re.sub(r'compileSdkVersion\s+flutter\.compileSdkVersion', 'compileSdkVersion 35', s)
     s = re.sub(r'minSdk\s*=\s*flutter\.minSdkVersion', 'minSdk = 24', s)
     s = re.sub(r'minSdkVersion\s+flutter\.minSdkVersion', 'minSdkVersion 24', s)
     s = re.sub(r'ndkVersion\s*=?\s*flutter\.ndkVersion', 'ndkVersion = "25.1.8937393"', s)
@@ -63,25 +65,38 @@ android {
     s = re.sub(r'signingConfig\s*=?\s*signingConfigs\.debug', 'signingConfig = signingConfigs.release', s)
     open(f, "w", encoding="utf-8").write(s)
 
-# 4. 直接在 Task 層級強制所有子專案的 Java 與 Kotlin 統一使用 JVM 17（不使用 afterEvaluate）
+# 4. 在 evaluationDependsOn 之前注入子專案規則，讓 Kotlin 自動對齊各套件的 Java targetCompatibility
 root_gradle = "android/build.gradle"
 try:
     r = open(root_gradle, encoding="utf-8").read()
     jvm_fix = '''
 subprojects {
-    tasks.withType(JavaCompile).configureEach {
-        sourceCompatibility = JavaVersion.VERSION_17.toString()
-        targetCompatibility = JavaVersion.VERSION_17.toString()
+    plugins.withId("com.android.library") {
+        android {
+            compileOptions {
+                sourceCompatibility = JavaVersion.VERSION_17
+                targetCompatibility = JavaVersion.VERSION_17
+            }
+        }
     }
     tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
         kotlinOptions {
-            jvmTarget = "17"
+            if (project.hasProperty("android") && project.android.compileOptions.targetCompatibility != null) {
+                jvmTarget = project.android.compileOptions.targetCompatibility.toString()
+            } else {
+                jvmTarget = "17"
+            }
         }
     }
 }
 '''
-    open(root_gradle, "w", encoding="utf-8").write(r + "\n" + jvm_fix)
+    target_anchor = 'subprojects {\n    project.evaluationDependsOn(":app")\n}'
+    if target_anchor in r:
+        r = r.replace(target_anchor, jvm_fix + "\n" + target_anchor)
+    else:
+        r = r + "\n" + jvm_fix
+    open(root_gradle, "w", encoding="utf-8").write(r)
 except FileNotFoundError:
     pass
 
-print("Release signingConfig and JVM 17 tasks forced successfully!")
+print("Release signingConfig and dynamic JVM target alignment applied successfully!")
