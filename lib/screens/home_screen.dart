@@ -14,6 +14,7 @@ import '../main.dart';
 import '../services/backup_service.dart';
 import '../services/bookmark_importer.dart';
 import '../services/google_drive_sync_service.dart';
+import '../services/reminder_service.dart';
 import '../services/share_handler.dart';
 import 'focus_mode_screen.dart';
 
@@ -34,12 +35,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   int? _selectedCollectionId;
   bool _isSyncing = false;
 
-  // 設定項目狀態
+  // 第一階段：外觀與收錄設定狀態
   bool _highContrastMode = false;
   bool _enhancedPreview = true;
   bool _detectClipboardOnOpen = false;
   String? _lastExportTime;
   String? _lastPromptedClipUrl;
+
+  // 第二階段：提醒與連結健康檢查狀態
+  bool _notifPermissionGranted = false;
+  bool _dailyReviewEnabled = true;
+  int _dailyReviewHour = 21;
+  int _dailyReviewMinute = 0;
+  bool _staleReminderEnabled = true;
+  int _staleDays = 30; // 14, 30, 60
+  bool _weekendReminderEnabled = false;
+  bool _linkHealthCheckEnabled = false;
+  bool _isCheckingLinks = false;
 
   final Set<int> _selectedIds = {};
   List<SavedItem> _currentItems = [];
@@ -78,13 +90,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed && _detectClipboardOnOpen) {
-      _checkClipboardForNewLink();
+    if (state == AppLifecycleState.resumed) {
+      ReminderService.isPermissionGranted().then((granted) {
+        if (mounted && granted != _notifPermissionGranted) {
+          setState(() => _notifPermissionGranted = granted);
+        }
+      });
+      if (_detectClipboardOnOpen) {
+        _checkClipboardForNewLink();
+      }
     }
   }
 
   Future<void> _loadAppSettings() async {
     final prefs = await SharedPreferences.getInstance();
+    final granted = await ReminderService.isPermissionGranted();
     if (!mounted) return;
     setState(() {
       _highContrastMode = prefs.getBool('setting_high_contrast') ?? false;
@@ -92,9 +112,34 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _detectClipboardOnOpen = prefs.getBool('setting_detect_clipboard') ?? false;
       _lastExportTime = prefs.getString('setting_last_export_time');
       _lastPromptedClipUrl = prefs.getString('setting_last_clip_url');
+
+      _notifPermissionGranted = granted;
+      _dailyReviewEnabled = prefs.getBool('rem_daily_enabled') ?? true;
+      _dailyReviewHour = prefs.getInt('rem_daily_hour') ?? 21;
+      _dailyReviewMinute = prefs.getInt('rem_daily_minute') ?? 0;
+      _staleReminderEnabled = prefs.getBool('rem_stale_enabled') ?? true;
+      _staleDays = prefs.getInt('rem_stale_days') ?? 30;
+      _weekendReminderEnabled = prefs.getBool('rem_weekend_enabled') ?? false;
+      _linkHealthCheckEnabled = prefs.getBool('rem_link_health_enabled') ?? false;
     });
+
+    if (granted) {
+      ReminderService.rescheduleAll(widget.db);
+    }
     if (_detectClipboardOnOpen) {
       Future.delayed(const Duration(milliseconds: 600), _checkClipboardForNewLink);
+    }
+    if (_linkHealthCheckEnabled) {
+      _autoRunWeeklyLinkHealthCheck(prefs);
+    }
+  }
+
+  Future<void> _autoRunWeeklyLinkHealthCheck(SharedPreferences prefs) async {
+    final lastCheckMs = prefs.getInt('rem_last_link_check_ms') ?? 0;
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    if (nowMs - lastCheckMs > const Duration(days: 7).inMilliseconds) {
+      await prefs.setInt('rem_last_link_check_ms', nowMs);
+      await ReminderService.runLinkHealthCheck(widget.db);
     }
   }
 
@@ -111,7 +156,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final detectedUrl = match.group(0)!;
       if (detectedUrl == _lastPromptedClipUrl) return;
 
-      // 檢查資料庫是否已存在此網址
       final existing = await (widget.db.select(widget.db.savedItems)
             ..where((t) => t.url.equals(detectedUrl) & t.isDeleted.equals(false)))
           .get();
@@ -492,7 +536,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  /// 溫潤質感「設定中心」底部面板
+  String _formatTime(int hour, int minute) {
+    final h = hour.toString().padLeft(2, '0');
+    final m = minute.toString().padLeft(2, '0');
+    return '$h:$m';
+  }
+
+  /// 溫潤質感「設定中心」底部面板（含第二階段「提醒」引擎）
   void _showSettingsBottomSheet() {
     showModalBottomSheet(
       context: context,
@@ -504,12 +554,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSheetState) {
           final googleUser = GoogleDriveSyncService.currentUser;
+          final timeStr = _formatTime(_dailyReviewHour, _dailyReviewMinute);
 
           return DraggableScrollableSheet(
             expand: false,
-            initialChildSize: 0.85,
+            initialChildSize: 0.88,
             minChildSize: 0.5,
-            maxChildSize: 0.94,
+            maxChildSize: 0.95,
             builder: (_, scrollController) => Column(
               children: [
                 const SizedBox(height: 10),
@@ -672,7 +723,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             '無障礙高對比模式',
                             style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
                           ),
-                          subtitle: const Text('加深卡片邊框、顏色更清楚、未讀提示加上文字標記'),
+                          subtitle: const Text('加深卡片邊框、顏色更清楚、提升文字辨識度'),
                           value: _highContrastMode,
                           onChanged: (val) async {
                             final prefs = await SharedPreferences.getInstance();
@@ -728,7 +779,256 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
                       const SizedBox(height: 20),
 
-                      // 4. 備份與匯入區塊
+                      // 4. 第二階段：提醒與通知區塊
+                      _buildSectionHeader('🔔 提醒'),
+                      _buildSettingsCard(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (!_notifPermissionGranted) ...[
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFFFF8E7),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: const Color(0xFFE5C97B)),
+                                ),
+                                child: Row(
+                                  children: [
+                                    const Icon(Icons.warning_amber_rounded, color: Color(0xFF9C6F19)),
+                                    const SizedBox(width: 10),
+                                    const Expanded(
+                                      child: Text(
+                                        '還沒允許通知，提醒不會出現',
+                                        style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                                      ),
+                                    ),
+                                    OutlinedButton(
+                                      onPressed: () async {
+                                        final ok = await ReminderService.requestPermission();
+                                        setSheetState(() => _notifPermissionGranted = ok);
+                                        if (mounted) setState(() => _notifPermissionGranted = ok);
+                                        if (ok) {
+                                          await ReminderService.rescheduleAll(widget.db);
+                                        }
+                                      },
+                                      child: const Text('允許通知'),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                            ],
+
+                            // 每日回顧
+                            SwitchListTile(
+                              contentPadding: EdgeInsets.zero,
+                              title: const Text(
+                                '每日回顧',
+                                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                              ),
+                              subtitle: Text('每天約 $timeStr 挑 1–3 則舊收藏給你'),
+                              value: _dailyReviewEnabled,
+                              onChanged: (val) async {
+                                final prefs = await SharedPreferences.getInstance();
+                                await prefs.setBool('rem_daily_enabled', val);
+                                setSheetState(() => _dailyReviewEnabled = val);
+                                if (mounted) setState(() {});
+                                await ReminderService.rescheduleAll(widget.db);
+                              },
+                            ),
+                            InkWell(
+                              onTap: () async {
+                                final picked = await showTimePicker(
+                                  context: context,
+                                  initialTime: TimeOfDay(
+                                    hour: _dailyReviewHour,
+                                    minute: _dailyReviewMinute,
+                                  ),
+                                );
+                                if (picked != null) {
+                                  final prefs = await SharedPreferences.getInstance();
+                                  await prefs.setInt('rem_daily_hour', picked.hour);
+                                  await prefs.setInt('rem_daily_minute', picked.minute);
+                                  setSheetState(() {
+                                    _dailyReviewHour = picked.hour;
+                                    _dailyReviewMinute = picked.minute;
+                                  });
+                                  if (mounted) setState(() {});
+                                  await ReminderService.rescheduleAll(widget.db);
+                                }
+                              },
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(vertical: 8),
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    const Text('回顧時間', style: TextStyle(fontSize: 15)),
+                                    Row(
+                                      children: [
+                                        Text(
+                                          '約 $timeStr',
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 15,
+                                            color: Color(0xFF5A4328),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 6),
+                                        const Icon(Icons.access_time, size: 18, color: Color(0xFF7A5C3E)),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: TextButton.icon(
+                                onPressed: () async {
+                                  final ok = await ReminderService.requestPermission();
+                                  setSheetState(() => _notifPermissionGranted = ok);
+                                  if (ok) {
+                                    await ReminderService.sendInstantReviewPreview(widget.db);
+                                  }
+                                },
+                                icon: const Icon(Icons.notifications_active_outlined, size: 16),
+                                label: const Text('立即發送一則回顧預覽', style: TextStyle(fontSize: 12)),
+                              ),
+                            ),
+
+                            const Divider(height: 20),
+
+                            // 久未看提醒
+                            SwitchListTile(
+                              contentPadding: EdgeInsets.zero,
+                              title: const Text(
+                                '久未看提醒',
+                                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                              ),
+                              subtitle: Text('每週最多一次，告訴你有幾則超過 $_staleDays 天沒看'),
+                              value: _staleReminderEnabled,
+                              onChanged: (val) async {
+                                final prefs = await SharedPreferences.getInstance();
+                                await prefs.setBool('rem_stale_enabled', val);
+                                setSheetState(() => _staleReminderEnabled = val);
+                                if (mounted) setState(() {});
+                                await ReminderService.rescheduleAll(widget.db);
+                              },
+                            ),
+                            const SizedBox(height: 6),
+                            Row(
+                              children: [14, 30, 60].map((days) {
+                                final isSelected = _staleDays == days;
+                                return Padding(
+                                  padding: const EdgeInsets.only(right: 10),
+                                  child: ChoiceChip(
+                                    label: Text(
+                                      '$days 天',
+                                      style: TextStyle(
+                                        fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                      ),
+                                    ),
+                                    selected: isSelected,
+                                    onSelected: (_) async {
+                                      final prefs = await SharedPreferences.getInstance();
+                                      await prefs.setInt('rem_stale_days', days);
+                                      setSheetState(() => _staleDays = days);
+                                      if (mounted) setState(() {});
+                                      await ReminderService.rescheduleAll(widget.db);
+                                    },
+                                  ),
+                                );
+                              }).toList(),
+                            ),
+
+                            const Divider(height: 24),
+
+                            // 清單週末提醒
+                            SwitchListTile(
+                              contentPadding: EdgeInsets.zero,
+                              title: const Text(
+                                '清單週末提醒',
+                                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                              ),
+                              subtitle: const Text('週五 19:00 提醒你清單上還沒去的店、還沒看的收藏'),
+                              value: _weekendReminderEnabled,
+                              onChanged: (val) async {
+                                final prefs = await SharedPreferences.getInstance();
+                                await prefs.setBool('rem_weekend_enabled', val);
+                                setSheetState(() => _weekendReminderEnabled = val);
+                                if (mounted) setState(() {});
+                                await ReminderService.rescheduleAll(widget.db);
+                              },
+                            ),
+
+                            const Divider(height: 24),
+
+                            // 連結健康檢查
+                            SwitchListTile(
+                              contentPadding: EdgeInsets.zero,
+                              title: const Text(
+                                '連結健康檢查',
+                                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                              ),
+                              subtitle: const Text('定期檢查 YouTube 影片與網頁收藏，原作失效時自動標記 #失效連結 並通知你'),
+                              value: _linkHealthCheckEnabled,
+                              onChanged: (val) async {
+                                final prefs = await SharedPreferences.getInstance();
+                                await prefs.setBool('rem_link_health_enabled', val);
+                                setSheetState(() => _linkHealthCheckEnabled = val);
+                                if (mounted) setState(() {});
+                              },
+                            ),
+                            const SizedBox(height: 6),
+                            SizedBox(
+                              width: double.infinity,
+                              child: OutlinedButton.icon(
+                                onPressed: _isCheckingLinks
+                                    ? null
+                                    : () async {
+                                        setSheetState(() => _isCheckingLinks = true);
+                                        try {
+                                          final res = await ReminderService.runLinkHealthCheck(widget.db);
+                                          if (mounted) {
+                                            ScaffoldMessenger.of(context).showSnackBar(
+                                              SnackBar(
+                                                content: Text(
+                                                  '健康檢查完成！共掃描 ${res['checked']} 個連結，發現 ${res['broken']} 個失效連結。',
+                                                ),
+                                              ),
+                                            );
+                                          }
+                                        } finally {
+                                          if (ctx.mounted) {
+                                            setSheetState(() => _isCheckingLinks = false);
+                                          }
+                                        }
+                                      },
+                                icon: _isCheckingLinks
+                                    ? const SizedBox(
+                                        width: 16,
+                                        height: 16,
+                                        child: CircularProgressIndicator(strokeWidth: 2),
+                                      )
+                                    : const Icon(Icons.health_and_safety_outlined, size: 18),
+                                label: Text(_isCheckingLinks ? '正在掃描收藏連結...' : '立即掃描所有連結健康度'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.only(left: 4, top: 6),
+                        child: Text(
+                          '提醒是大約時間，手機省電模式開啟時可能會稍微延後推播。',
+                          style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+                        ),
+                      ),
+
+                      const SizedBox(height: 20),
+
+                      // 5. 備份與匯入區塊
                       _buildSectionHeader('備份與匯入'),
                       _buildSettingsCard(
                         child: Column(
@@ -820,7 +1120,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
                       const SizedBox(height: 20),
 
-                      // 5. 關於區塊
+                      // 6. 關於區塊
                       _buildSectionHeader('關於'),
                       _buildSettingsCard(
                         child: Column(
@@ -832,7 +1132,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             ),
                             const SizedBox(height: 2),
                             Text(
-                              '版本 1.3.0',
+                              '版本 1.4.0',
                               style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
                             ),
                             const Divider(height: 20),
@@ -897,9 +1197,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  /// 「請作者喝杯咖啡」互動彈窗
   void _showCoffeeSponsorSheet() {
-    int selectedTier = 1; // 0: $30, 1: $90, 2: $150
+    int selectedTier = 1;
     final tiers = [
       {'title': '小杯', 'sub': '一點心意', 'price': '\$30.00'},
       {'title': '中杯', 'sub': '一杯拿鐵', 'price': '\$90.00'},
@@ -1020,7 +1319,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  /// 徹底刪除帳號、雲端備份與本機所有資料（符合 Google Play 資料刪除規範）
   Future<void> _confirmDeleteAccountAndData(BuildContext sheetCtx) async {
     final confirm = await showDialog<bool>(
       context: context,
