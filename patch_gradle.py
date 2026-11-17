@@ -16,7 +16,7 @@ import io.flutter.embedding.android.FlutterActivity
 class MainActivity: FlutterActivity()
 """)
 
-# 1. 設定最穩定的黃金組合：Kotlin 1.9.24 + AGP 8.3.2（完全相容 R8 2.0.0 上限）
+# 1. 設定最穩定的黃金組合：Kotlin 1.9.24 + AGP 8.3.2
 for f in glob.glob("android/settings.gradle*"):
     s = open(f, encoding="utf-8").read()
     s = re.sub(r'(id\s+["\']org\.jetbrains\.kotlin\.android["\']\s+version\s+["\'])[^"\']+', r'\g<1>1.9.24', s)
@@ -32,7 +32,7 @@ try:
 except FileNotFoundError:
     pass
 
-# 3. 加入網路逾時延長設定，避免 GitHub Actions 連 Maven Central 瞬斷失敗
+# 3. 加入網路逾時延長設定
 gradle_props = "android/gradle.properties"
 try:
     gp = open(gradle_props, encoding="utf-8").read() if os.path.exists(gradle_props) else ""
@@ -46,7 +46,7 @@ org.gradle.HcMaxRetries=5
 except Exception:
     pass
 
-# 4. 更新 app/build.gradle：升級 compileSdk 35、注入 signingConfigs.release 並關閉非必要壓縮
+# 4. 更新 app/build.gradle：升級 compileSdk 35、開啟 coreLibraryDesugaring、注入 signingConfigs.release
 for f in glob.glob("android/app/build.gradle*"):
     s = open(f, encoding="utf-8").read()
     s = re.sub(r'namespace\s*=?\s*["\'][^"\']+["\']', f'namespace = "{PACKAGE_NAME}"', s)
@@ -58,6 +58,17 @@ for f in glob.glob("android/app/build.gradle*"):
     s = re.sub(r'ndkVersion\s*=?\s*flutter\.ndkVersion', 'ndkVersion = "25.1.8937393"', s)
     s = s.replace('JavaVersion.VERSION_1_8', 'JavaVersion.VERSION_17')
     s = re.sub(r'jvmTarget\s*=\s*["\']1\.8["\']', 'jvmTarget = "17"', s)
+
+    # 啟用 coreLibraryDesugaring (flutter_local_notifications 必備)
+    if "coreLibraryDesugaringEnabled" not in s:
+        s = re.sub(
+            r'compileOptions\s*\{',
+            'compileOptions {\n        coreLibraryDesugaringEnabled true',
+            s,
+            count=1
+        )
+    if "desugar_jdk_libs" not in s:
+        s = s + '\ndependencies {\n    coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.0.4"\n}\n'
 
     signing_setup = '''
 def keystoreProperties = new Properties()
@@ -82,7 +93,7 @@ android {
     s = re.sub(r'signingConfig\s*=?\s*signingConfigs\.debug', release_config, s)
     open(f, "w", encoding="utf-8").write(s)
 
-# 5. 在 evaluationDependsOn 之前注入子專案規則，讓 Kotlin 自動對齊各套件的 Java targetCompatibility
+# 5. 在 evaluationDependsOn 之前注入子專案規則
 root_gradle = "android/build.gradle"
 try:
     r = open(root_gradle, encoding="utf-8").read()
@@ -116,4 +127,4 @@ subprojects {
 except FileNotFoundError:
     pass
 
-print("Stable Kotlin 1.9.24 + AGP 8.3.2 + Maven retry config applied successfully!")
+print("Stable Kotlin 1.9.24 + AGP 8.3.2 + Desugaring applied successfully!")

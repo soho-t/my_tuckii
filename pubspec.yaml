@@ -7,6 +7,8 @@ environment:
   sdk: '>=3.3.0 <4.0.0'
 
 dependencies:
+  flutter_local_notifications: ^17.2.3
+  timezone: ^0.9.4
   flutter:
     sdk: flutter
   drift: ^2.20.0
@@ -27,9 +29,7 @@ dependencies:
   googleapis: ^13.2.0
   http: ^1.2.2
   shared_preferences: ^2.3.2
-  flutter_local_notifications: ^17.2.3
-  timezone: ^0.9.4
-  extension_google_sign_in_as_googleapis_auth: ^2.0.12
+      extension_google_sign_in_as_googleapis_auth: ^2.0.12
 
 dev_dependencies:
   flutter_test:
