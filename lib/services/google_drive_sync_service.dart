@@ -38,9 +38,6 @@ class GoogleDriveSyncService {
   static GoogleSignInAccount? get currentUser =>
       _isBoundCache ? _googleSignIn.currentUser : null;
 
-  /// App 啟動時呼叫：檢查本機是否曾主動綁定過
-  /// - 全新安裝預設為 false -> 直接回傳 null，絕不自動登入任何帳號
-  /// - 已綁定過為 true -> 自動恢復已綁定帳號，重啟免重新登入
   static Future<GoogleSignInAccount?> signInSilently() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -59,7 +56,6 @@ class GoogleDriveSyncService {
     }
   }
 
-  /// 使用者主動點擊雲端按鈕綁定時呼叫：先清除快取確保彈出 Google 帳號選擇視窗
   static Future<GoogleSignInAccount?> signIn() async {
     try {
       await _googleSignIn.signOut();
@@ -74,7 +70,6 @@ class GoogleDriveSyncService {
     return account;
   }
 
-  /// 解除綁定並清除本機與 Google 授權快取
   static Future<void> signOut() async {
     _isBoundCache = false;
     final prefs = await SharedPreferences.getInstance();
@@ -86,9 +81,35 @@ class GoogleDriveSyncService {
     }
   }
 
-  /// 執行秒級增量差異同步：
-  /// 1. 合併輕量 sync_index.json（僅幾 KB）
-  /// 2. 僅上傳新增的本地截圖/文件，僅下載缺失的雲端截圖/文件
+  /// 徹底刪除雲端 appDataFolder 所有同步檔案並解除帳號授權
+  static Future<void> deleteCloudDataAndDisconnect() async {
+    try {
+      final account = _googleSignIn.currentUser ?? await _googleSignIn.signInSilently();
+      if (account != null) {
+        final headers = await account.authHeaders;
+        final authClient = _GoogleAuthClient(headers);
+        try {
+          final driveApi = drive.DriveApi(authClient);
+          final fileList = await driveApi.files.list(
+            spaces: 'appDataFolder',
+            $fields: 'files(id)',
+            pageSize: 1000,
+          );
+          for (final f in (fileList.files ?? [])) {
+            if (f.id != null) {
+              try {
+                await driveApi.files.delete(f.id!);
+              } catch (_) {}
+            }
+          }
+        } finally {
+          authClient.close();
+        }
+      }
+    } catch (_) {}
+    await signOut();
+  }
+
   static Future<String> syncNow(AppDatabase db) async {
     final prefs = await SharedPreferences.getInstance();
     _isBoundCache = prefs.getBool(_boundPrefKey) ?? false;
@@ -97,7 +118,6 @@ class GoogleDriveSyncService {
     if (_isBoundCache) {
       account = _googleSignIn.currentUser ?? await _googleSignIn.signInSilently();
     }
-    // 若尚未綁定（或授權已過期），強制呼叫 signIn() 彈出帳號選擇視窗
     account ??= await signIn();
 
     if (account == null) {
@@ -111,7 +131,6 @@ class GoogleDriveSyncService {
       final driveApi = drive.DriveApi(authClient);
       final docDir = await getApplicationDocumentsDirectory();
 
-      // 1. 列出雲端 appDataFolder 內現有檔案清單
       final fileList = await driveApi.files.list(
         spaces: 'appDataFolder',
         $fields: 'files(id, name, modifiedTime)',
@@ -123,7 +142,6 @@ class GoogleDriveSyncService {
           if (f.name != null) f.name!: f
       };
 
-      // 2. 下載雲端輕量索引 sync_index.json（若存在）並進行雙向合併
       final remoteIndexFile = remoteByName['sync_index.json'];
       if (remoteIndexFile != null && remoteIndexFile.id != null) {
         final media = await driveApi.files.get(
@@ -136,7 +154,6 @@ class GoogleDriveSyncService {
         await _mergeRemoteData(db, remoteData, docDir.path);
       }
 
-      // 3. 取得合併後的最新本機資料，整理需要上傳的差異檔案
       final allCols = await db.select(db.collections).get();
       final allItems = await db.select(db.savedItems).get();
 
@@ -144,7 +161,6 @@ class GoogleDriveSyncService {
       int uploadedCount = 0;
       int downloadedCount = 0;
 
-      // 4. 針對有效項目同步實體媒體檔案（只傳差異！）
       for (final item in allItems) {
         if (item.isDeleted || item.localImagePath == null) continue;
 
@@ -182,7 +198,6 @@ class GoogleDriveSyncService {
         }
       }
 
-      // 5. 清理雲端已刪除項目的殘留媒體檔
       for (final item in allItems) {
         if (item.isDeleted && item.localImagePath != null) {
           final fileName = p.basename(item.localImagePath!);
@@ -195,7 +210,6 @@ class GoogleDriveSyncService {
         }
       }
 
-      // 6. 產生最新輕量 sync_index.json 並上傳覆蓋至雲端
       final exportPayload = {
         'version': 1,
         'syncedAt': DateTime.now().toIso8601String(),
@@ -247,7 +261,6 @@ class GoogleDriveSyncService {
     }
   }
 
-  /// 依據 updatedAt 時間戳合併雲端與本機紀錄（較新者勝出）
   static Future<void> _mergeRemoteData(
     AppDatabase db,
     Map<String, dynamic> remoteData,

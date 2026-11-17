@@ -7,6 +7,7 @@ import 'package:metadata_fetch/metadata_fetch.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../database/app_database.dart';
 import '../main.dart';
@@ -24,7 +25,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   late ShareHandlerService _shareHandler;
   final TextEditingController _searchController = TextEditingController();
 
@@ -33,6 +34,13 @@ class _HomeScreenState extends State<HomeScreen> {
   int? _selectedCollectionId;
   bool _isSyncing = false;
 
+  // 設定項目狀態
+  bool _highContrastMode = false;
+  bool _enhancedPreview = true;
+  bool _detectClipboardOnOpen = false;
+  String? _lastExportTime;
+  String? _lastPromptedClipUrl;
+
   final Set<int> _selectedIds = {};
   List<SavedItem> _currentItems = [];
   bool get _isSelectionMode => _selectedIds.isNotEmpty;
@@ -40,6 +48,9 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _loadAppSettings();
+
     GoogleDriveSyncService.signInSilently().then((_) {
       if (mounted) setState(() {});
     });
@@ -59,9 +70,85 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _shareHandler.dispose();
     _searchController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && _detectClipboardOnOpen) {
+      _checkClipboardForNewLink();
+    }
+  }
+
+  Future<void> _loadAppSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      _highContrastMode = prefs.getBool('setting_high_contrast') ?? false;
+      _enhancedPreview = prefs.getBool('setting_enhanced_preview') ?? true;
+      _detectClipboardOnOpen = prefs.getBool('setting_detect_clipboard') ?? false;
+      _lastExportTime = prefs.getString('setting_last_export_time');
+      _lastPromptedClipUrl = prefs.getString('setting_last_clip_url');
+    });
+    if (_detectClipboardOnOpen) {
+      Future.delayed(const Duration(milliseconds: 600), _checkClipboardForNewLink);
+    }
+  }
+
+  Future<void> _checkClipboardForNewLink() async {
+    try {
+      final clipData = await Clipboard.getData(Clipboard.kTextPlain);
+      final rawText = clipData?.text?.trim() ?? '';
+      if (rawText.isEmpty) return;
+
+      final urlRegExp = RegExp(r'(https?:\/\/[^\s]+)');
+      final match = urlRegExp.firstMatch(rawText);
+      if (match == null) return;
+
+      final detectedUrl = match.group(0)!;
+      if (detectedUrl == _lastPromptedClipUrl) return;
+
+      // 檢查資料庫是否已存在此網址
+      final existing = await (widget.db.select(widget.db.savedItems)
+            ..where((t) => t.url.equals(detectedUrl) & t.isDeleted.equals(false)))
+          .get();
+      if (existing.isNotEmpty) return;
+
+      _lastPromptedClipUrl = detectedUrl;
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('setting_last_clip_url', detectedUrl);
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 6),
+          content: Text(
+            '偵測到複製的連結：\n$detectedUrl',
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+          action: SnackBarAction(
+            label: '一鍵收藏',
+            onPressed: () async {
+              final itemId = await widget.db.into(widget.db.savedItems).insert(
+                    SavedItemsCompanion.insert(
+                      itemType: 'link',
+                      url: drift.Value(detectedUrl),
+                      title: drift.Value(detectedUrl),
+                    ),
+                  );
+              if (_enhancedPreview) {
+                _fetchTitleInBackground(itemId, detectedUrl);
+              }
+            },
+          ),
+        ),
+      );
+    } catch (_) {}
   }
 
   Future<void> _handleGoogleSync() async {
@@ -199,7 +286,6 @@ class _HomeScreenState extends State<HomeScreen> {
             : AppBar(
                 title: const Text('我的收藏庫', style: TextStyle(fontWeight: FontWeight.bold)),
                 actions: [
-                  // Google 帳號雲端增量同步按鈕
                   _isSyncing
                       ? const Padding(
                           padding: EdgeInsets.symmetric(horizontal: 12),
@@ -219,7 +305,6 @@ class _HomeScreenState extends State<HomeScreen> {
                               : '綁定 Google 帳號雲端同步',
                           onPressed: _handleGoogleSync,
                         ),
-
                   StreamBuilder<List<SavedItem>>(
                     stream: widget.db.watchUnreadItems(),
                     builder: (context, snapshot) {
@@ -238,10 +323,13 @@ class _HomeScreenState extends State<HomeScreen> {
                       );
                     },
                   ),
-                  _buildMoreMenuButton(),
+                  IconButton(
+                    icon: const Icon(Icons.settings_outlined),
+                    tooltip: '設定',
+                    onPressed: _showSettingsBottomSheet,
+                  ),
                 ],
               ),
-
         body: Column(
           children: [
             Padding(
@@ -267,7 +355,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 onChanged: (val) => setState(() => _searchQuery = val.trim()),
               ),
             ),
-
             SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
@@ -287,7 +374,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 ],
               ),
             ),
-
             StreamBuilder<List<Collection>>(
               stream: widget.db.watchAllCollections(),
               builder: (context, snapshot) {
@@ -335,9 +421,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 );
               },
             ),
-
             const SizedBox(height: 6),
-
             Expanded(
               child: StreamBuilder<List<SavedItem>>(
                 stream: _watchFilteredItems(),
@@ -374,7 +458,6 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ],
         ),
-
         floatingActionButton: _isSelectionMode
             ? null
             : FloatingActionButton.extended(
@@ -382,7 +465,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 icon: const Icon(Icons.add),
                 label: const Text('新增'),
               ),
-
         bottomNavigationBar: _isSelectionMode
             ? BottomAppBar(
                 child: Row(
@@ -410,129 +492,618 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildMoreMenuButton() {
-    final googleUser = GoogleDriveSyncService.currentUser;
+  /// 溫潤質感「設定中心」底部面板
+  void _showSettingsBottomSheet() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFFFAF7F2),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) {
+          final googleUser = GoogleDriveSyncService.currentUser;
 
-    return PopupMenuButton<String>(
-      icon: const Icon(Icons.more_vert),
-      onSelected: (value) async {
-        if (value == 'google_sync') {
-          await _handleGoogleSync();
-        } else if (value == 'google_signout') {
-          await GoogleDriveSyncService.signOut();
-          if (mounted) {
-            setState(() {});
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('已解除 Google 帳號同步綁定')),
-            );
-          }
-        } else if (value == 'export') {
-          try {
-            await BackupService.exportBackup(widget.db);
-          } catch (e) {
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('備份失敗：$e')));
-            }
-          }
-        } else if (value == 'import') {
-          final confirm = await showDialog<bool>(
-            context: context,
-            builder: (ctx) => AlertDialog(
-              title: const Text('確定要還原備份？'),
-              content: const Text('還原將會覆蓋目前手機上的所有書籤、截圖與文件，此操作無法復原。'),
-              actions: [
-                TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
-                FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('選取備份檔')),
+          return DraggableScrollableSheet(
+            expand: false,
+            initialChildSize: 0.85,
+            minChildSize: 0.5,
+            maxChildSize: 0.94,
+            builder: (_, scrollController) => Column(
+              children: [
+                const SizedBox(height: 10),
+                Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.brown.withOpacity(0.25),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 12, 12, 8),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        '設定',
+                        style: TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF2C2520),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close),
+                        onPressed: () => Navigator.pop(ctx),
+                      ),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: ListView(
+                    controller: scrollController,
+                    padding: const EdgeInsets.fromLTRB(20, 4, 20, 32),
+                    children: [
+                      // 1. 帳號區塊
+                      _buildSectionHeader('帳號'),
+                      _buildSettingsCard(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (googleUser != null) ...[
+                              Row(
+                                children: [
+                                  CircleAvatar(
+                                    backgroundColor: const Color(0xFFE8DFD1),
+                                    foregroundColor: const Color(0xFF4A3B2C),
+                                    child: Text(
+                                      (googleUser.displayName?.isNotEmpty == true
+                                              ? googleUser.displayName![0]
+                                              : googleUser.email[0])
+                                          .toUpperCase(),
+                                      style: const TextStyle(fontWeight: FontWeight.bold),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          googleUser.displayName ?? 'Google 使用者',
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 16,
+                                          ),
+                                        ),
+                                        Text(
+                                          googleUser.email,
+                                          style: TextStyle(color: Colors.grey.shade700, fontSize: 13),
+                                        ),
+                                        Text(
+                                          '已用 Google 帳戶登入',
+                                          style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 16),
+                              const Text(
+                                '雲端同步',
+                                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                '資料將加密同步至你個人 Google Drive 隱藏專屬資料夾（appDataFolder），開發者無法存取。',
+                                style: TextStyle(color: Colors.grey.shade700, fontSize: 13),
+                              ),
+                              const SizedBox(height: 12),
+                              Wrap(
+                                spacing: 10,
+                                runSpacing: 8,
+                                children: [
+                                  FilledButton.tonalIcon(
+                                    onPressed: () async {
+                                      Navigator.pop(ctx);
+                                      await _handleGoogleSync();
+                                    },
+                                    icon: const Icon(Icons.sync, size: 18),
+                                    label: const Text('立即同步'),
+                                  ),
+                                  OutlinedButton(
+                                    onPressed: () async {
+                                      await GoogleDriveSyncService.signOut();
+                                      setSheetState(() {});
+                                      if (mounted) {
+                                        setState(() {});
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          const SnackBar(content: Text('已登出並解除 Google 帳號綁定')),
+                                        );
+                                      }
+                                    },
+                                    child: const Text('登出'),
+                                  ),
+                                  OutlinedButton(
+                                    style: OutlinedButton.styleFrom(
+                                      foregroundColor: Colors.red.shade700,
+                                      side: BorderSide(color: Colors.red.shade300),
+                                    ),
+                                    onPressed: () => _confirmDeleteAccountAndData(ctx),
+                                    child: const Text('刪除帳號與資料'),
+                                  ),
+                                ],
+                              ),
+                            ] else ...[
+                              const Text(
+                                '尚未綁定 Google 帳號',
+                                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                '目前收藏只存在這支手機。綁定個人 Google 帳號後即可跨裝置秒級增量同步。',
+                                style: TextStyle(color: Colors.grey.shade700, fontSize: 13),
+                              ),
+                              const SizedBox(height: 12),
+                              FilledButton.icon(
+                                onPressed: () async {
+                                  Navigator.pop(ctx);
+                                  await _handleGoogleSync();
+                                },
+                                icon: const Icon(Icons.login),
+                                label: const Text('綁定 Google 帳號'),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+
+                      const SizedBox(height: 20),
+
+                      // 2. 外觀區塊
+                      _buildSectionHeader('外觀'),
+                      _buildSettingsCard(
+                        child: SwitchListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text(
+                            '無障礙高對比模式',
+                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                          ),
+                          subtitle: const Text('加深卡片邊框、顏色更清楚、未讀提示加上文字標記'),
+                          value: _highContrastMode,
+                          onChanged: (val) async {
+                            final prefs = await SharedPreferences.getInstance();
+                            await prefs.setBool('setting_high_contrast', val);
+                            setSheetState(() => _highContrastMode = val);
+                            if (mounted) setState(() {});
+                          },
+                        ),
+                      ),
+
+                      const SizedBox(height: 20),
+
+                      // 3. 收錄區塊
+                      _buildSectionHeader('收錄'),
+                      _buildSettingsCard(
+                        child: Column(
+                          children: [
+                            SwitchListTile(
+                              contentPadding: EdgeInsets.zero,
+                              title: const Text(
+                                '增強預覽',
+                                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                              ),
+                              subtitle: const Text('存入網址時自動在背景載入公開頁面以取得標題與摘要'),
+                              value: _enhancedPreview,
+                              onChanged: (val) async {
+                                final prefs = await SharedPreferences.getInstance();
+                                await prefs.setBool('setting_enhanced_preview', val);
+                                setSheetState(() => _enhancedPreview = val);
+                                if (mounted) setState(() {});
+                              },
+                            ),
+                            const Divider(),
+                            SwitchListTile(
+                              contentPadding: EdgeInsets.zero,
+                              title: const Text(
+                                '開啟時偵測剪貼簿連結',
+                                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                              ),
+                              subtitle: const Text('打開隨手存時，自動檢查剪貼簿裡是否有新複製的連結並提示一鍵收藏'),
+                              value: _detectClipboardOnOpen,
+                              onChanged: (val) async {
+                                final prefs = await SharedPreferences.getInstance();
+                                await prefs.setBool('setting_detect_clipboard', val);
+                                setSheetState(() => _detectClipboardOnOpen = val);
+                                if (mounted) setState(() {});
+                                if (val) _checkClipboardForNewLink();
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+
+                      const SizedBox(height: 20),
+
+                      // 4. 備份與匯入區塊
+                      _buildSectionHeader('備份與匯入'),
+                      _buildSettingsCard(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '將所有收藏、收藏夾、標籤、筆記與本機截圖/文件完整打包成一個離線 ZIP 檔。',
+                              style: TextStyle(color: Colors.grey.shade700, fontSize: 13),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              _lastExportTime != null ? '上次匯出：$_lastExportTime' : '還沒匯出過',
+                              style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+                            ),
+                            const SizedBox(height: 12),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: OutlinedButton.icon(
+                                    onPressed: () async {
+                                      try {
+                                        await BackupService.exportBackup(widget.db);
+                                        final nowStr = DateTime.now().toString().substring(0, 16);
+                                        final prefs = await SharedPreferences.getInstance();
+                                        await prefs.setString('setting_last_export_time', nowStr);
+                                        setSheetState(() => _lastExportTime = nowStr);
+                                      } catch (e) {
+                                        if (mounted) {
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            SnackBar(content: Text('備份失敗：$e')),
+                                          );
+                                        }
+                                      }
+                                    },
+                                    icon: const Icon(Icons.ios_share, size: 18),
+                                    label: const Text('匯出備份'),
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: OutlinedButton.icon(
+                                    onPressed: () async {
+                                      Navigator.pop(ctx);
+                                      await _confirmAndRestoreBackup();
+                                    },
+                                    icon: const Icon(Icons.restore, size: 18),
+                                    label: const Text('從備份還原'),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const Divider(height: 24),
+                            ListTile(
+                              contentPadding: EdgeInsets.zero,
+                              leading: const Icon(Icons.bookmark_add_outlined),
+                              title: const Text(
+                                '匯入瀏覽器書籤 (HTML)',
+                                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                              ),
+                              subtitle: const Text('支援 Chrome / Edge / Safari 匯出的書籤檔'),
+                              trailing: const Icon(Icons.chevron_right),
+                              onTap: () async {
+                                Navigator.pop(ctx);
+                                try {
+                                  final count = await BookmarkImporterService.importFromHtmlFile(widget.db);
+                                  if (count != null && mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text(
+                                          count > 0
+                                              ? '成功匯入 $count 筆書籤，並自動建立對應收藏夾！'
+                                              : '沒有發現新的書籤（可能皆已存在於收藏庫中）',
+                                        ),
+                                      ),
+                                    );
+                                  }
+                                } catch (e) {
+                                  if (mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(content: Text('書籤匯入失敗：$e')),
+                                    );
+                                  }
+                                }
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+
+                      const SizedBox(height: 20),
+
+                      // 5. 關於區塊
+                      _buildSectionHeader('關於'),
+                      _buildSettingsCard(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              '隨手存 MyTuckii',
+                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              '版本 1.3.0',
+                              style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+                            ),
+                            const Divider(height: 20),
+                            ListTile(
+                              contentPadding: EdgeInsets.zero,
+                              leading: const Icon(Icons.coffee_outlined, color: Color(0xFF7A5C3E)),
+                              title: const Text(
+                                '請作者喝杯咖啡',
+                                style: TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                              subtitle: const Text('單次贊助支持開發，不是訂閱'),
+                              trailing: const Icon(Icons.chevron_right),
+                              onTap: () => _showCoffeeSponsorSheet(),
+                            ),
+                            const Divider(height: 8),
+                            ListTile(
+                              contentPadding: EdgeInsets.zero,
+                              title: const Text('隱私權政策與專案首頁'),
+                              trailing: const Icon(Icons.open_in_new, size: 18),
+                              onTap: () => launchUrl(
+                                Uri.parse('https://github.com/sohot-t/my_tuckii'),
+                                mode: LaunchMode.externalApplication,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ],
             ),
           );
-
-          if (confirm == true) {
-            try {
-              final newDb = await BackupService.importBackup(widget.db);
-              if (newDb != null && mounted) {
-                globalDb = newDb;
-                Navigator.pushReplacement(
-                  context,
-                  MaterialPageRoute(builder: (_) => HomeScreen(db: globalDb)),
-                );
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('資料還原成功！')),
-                );
-              }
-            } catch (e) {
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('還原失敗：$e')));
-              }
-            }
-          }
-        } else if (value == 'import_html') {
-          try {
-            final count = await BookmarkImporterService.importFromHtmlFile(widget.db);
-            if (count != null && mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(
-                    count > 0
-                        ? '成功匯入 $count 筆書籤，並自動建立對應收藏夾！'
-                        : '沒有發現新的書籤（可能皆已存在於收藏庫中）',
-                  ),
-                ),
-              );
-            }
-          } catch (e) {
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('書籤匯入失敗：$e')));
-            }
-          }
-        }
-      },
-      itemBuilder: (context) => [
-        PopupMenuItem(
-          value: 'google_sync',
-          child: ListTile(
-            leading: const Icon(Icons.sync, color: Colors.blue),
-            title: Text(googleUser != null ? '立即同步至 Google Drive' : '綁定 Google 帳號同步'),
-            subtitle: googleUser != null ? Text(googleUser.email, style: const TextStyle(fontSize: 11)) : null,
-            contentPadding: EdgeInsets.zero,
-          ),
-        ),
-        if (googleUser != null)
-          const PopupMenuItem(
-            value: 'google_signout',
-            child: ListTile(
-              leading: Icon(Icons.logout, color: Colors.orange),
-              title: Text('解除 Google 帳號綁定'),
-              contentPadding: EdgeInsets.zero,
-            ),
-          ),
-        const PopupMenuDivider(),
-        const PopupMenuItem(
-          value: 'import_html',
-          child: ListTile(
-            leading: Icon(Icons.bookmark_add_outlined),
-            title: Text('匯入瀏覽器書籤 (HTML)'),
-            contentPadding: EdgeInsets.zero,
-          ),
-        ),
-        const PopupMenuItem(
-          value: 'export',
-          child: ListTile(
-            leading: Icon(Icons.archive_outlined),
-            title: Text('匯出離線 ZIP 備份包'),
-            contentPadding: EdgeInsets.zero,
-          ),
-        ),
-        const PopupMenuItem(
-          value: 'import',
-          child: ListTile(
-            leading: Icon(Icons.restore_page_outlined),
-            title: Text('從離線 ZIP 備份還原'),
-            contentPadding: EdgeInsets.zero,
-          ),
-        ),
-      ],
+        },
+      ),
     );
+  }
+
+  Widget _buildSectionHeader(String title) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 4, bottom: 8),
+      child: Text(
+        title,
+        style: const TextStyle(
+          fontSize: 14,
+          fontWeight: FontWeight.bold,
+          color: Color(0xFF7A5C3E),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSettingsCard({required Widget child}) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE6DEC8)),
+      ),
+      child: child,
+    );
+  }
+
+  /// 「請作者喝杯咖啡」互動彈窗
+  void _showCoffeeSponsorSheet() {
+    int selectedTier = 1; // 0: $30, 1: $90, 2: $150
+    final tiers = [
+      {'title': '小杯', 'sub': '一點心意', 'price': '\$30.00'},
+      {'title': '中杯', 'sub': '一杯拿鐵', 'price': '\$90.00'},
+      {'title': '大杯', 'sub': '再加一塊蛋糕', 'price': '\$150.00'},
+    ];
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFFFAF7F2),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setCoffeeState) => Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    '請作者喝杯咖啡',
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.pop(ctx),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              const Text('選一杯', style: TextStyle(fontWeight: FontWeight.w600, color: Color(0xFF7A5C3E))),
+              const SizedBox(height: 10),
+              ...List.generate(tiers.length, (i) {
+                final isSelected = selectedTier == i;
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(14),
+                    onTap: () => setCoffeeState(() => selectedTier = i),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: isSelected ? const Color(0xFF8C6239) : const Color(0xFFE0D6C3),
+                          width: isSelected ? 2 : 1,
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            isSelected ? Icons.radio_button_checked : Icons.radio_button_off,
+                            color: isSelected ? const Color(0xFF8C6239) : Colors.grey,
+                          ),
+                          const SizedBox(width: 10),
+                          const Icon(Icons.coffee, size: 20, color: Color(0xFF8C6239)),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  tiers[i]['title']!,
+                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                                ),
+                                Text(
+                                  tiers[i]['sub']!,
+                                  style: TextStyle(color: Colors.grey.shade700, fontSize: 13),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Text(
+                            tiers[i]['price']!,
+                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              }),
+              const SizedBox(height: 6),
+              Text(
+                '單次付款，由 Google Play 收款，不會自動續費。隨手存所有核心功能皆免費開放使用。',
+                style: TextStyle(color: Colors.grey.shade700, fontSize: 12, height: 1.4),
+              ),
+              const SizedBox(height: 16),
+              FilledButton.icon(
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFFB68D40),
+                  foregroundColor: Colors.black87,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('感謝您的支持！待應用程式於 Google Play 正式上架後即可啟用 ${tiers[selectedTier]['price']} 贊助通道。'),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.coffee),
+                label: Text(
+                  '請喝一杯 · ${tiers[selectedTier]['price']}',
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 徹底刪除帳號、雲端備份與本機所有資料（符合 Google Play 資料刪除規範）
+  Future<void> _confirmDeleteAccountAndData(BuildContext sheetCtx) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('確定要刪除帳號與所有資料？'),
+        content: const Text(
+          '此操作將會：\n1. 清空您個人 Google Drive 隱藏資料夾內的同步備份\n2. 刪除手機本機所有收藏項目、截圖與文件\n3. 解除 Google 帳號綁定\n\n刪除後無法復原，確定繼續嗎？',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('確定徹底刪除'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+    if (sheetCtx.mounted) Navigator.pop(sheetCtx);
+
+    setState(() => _isSyncing = true);
+    try {
+      await GoogleDriveSyncService.deleteCloudDataAndDisconnect();
+      final allItems = await widget.db.select(widget.db.savedItems).get();
+      for (final item in allItems) {
+        if (item.localImagePath != null) {
+          final f = File(item.localImagePath!);
+          if (await f.exists()) await f.delete();
+        }
+      }
+      await widget.db.delete(widget.db.savedItems).go();
+      await widget.db.delete(widget.db.collections).go();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('已徹底刪除雲端與本機所有資料，並解除帳號綁定')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('刪除過程發生錯誤：$e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isSyncing = false);
+    }
+  }
+
+  Future<void> _confirmAndRestoreBackup() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('確定要還原備份？'),
+        content: const Text('還原將會覆蓋目前手機上的所有書籤、截圖與文件，此操作無法復原。'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('選取備份檔')),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      try {
+        final newDb = await BackupService.importBackup(widget.db);
+        if (newDb != null && mounted) {
+          globalDb = newDb;
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (_) => HomeScreen(db: globalDb)),
+          );
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('資料還原成功！')),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('還原失敗：$e')));
+        }
+      }
+    }
   }
 
   Widget _buildFilterChip(String label, String value) {
@@ -555,12 +1126,14 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return Card(
       clipBehavior: Clip.antiAlias,
-      elevation: isSelected ? 4 : 1,
+      elevation: isSelected ? 4 : (_highContrastMode ? 2 : 1),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(14),
         side: isSelected
             ? BorderSide(color: Theme.of(context).colorScheme.primary, width: 3)
-            : BorderSide.none,
+            : (_highContrastMode
+                ? const BorderSide(color: Colors.black87, width: 1.5)
+                : BorderSide.none),
       ),
       child: InkWell(
         onTap: () {
@@ -655,7 +1228,10 @@ class _HomeScreenState extends State<HomeScreen> {
                           item.title,
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                          style: TextStyle(
+                            fontWeight: _highContrastMode ? FontWeight.bold : FontWeight.w600,
+                            fontSize: 13,
+                          ),
                         ),
                         Row(
                           children: [
@@ -666,7 +1242,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                       ? Icons.sticky_note_2_outlined
                                       : (isFile ? Icons.attach_file : Icons.public)),
                               size: 12,
-                              color: Colors.grey,
+                              color: _highContrastMode ? Colors.black87 : Colors.grey,
                             ),
                             const SizedBox(width: 4),
                             Expanded(
@@ -676,7 +1252,10 @@ class _HomeScreenState extends State<HomeScreen> {
                                     : (item.url ?? (isNote ? '文字筆記' : (isFile ? '本機文件' : '本機截圖'))),
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(fontSize: 11, color: Colors.grey),
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: _highContrastMode ? Colors.black87 : Colors.grey,
+                                ),
                               ),
                             ),
                           ],
@@ -1003,7 +1582,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 ],
               ),
               const SizedBox(height: 8),
-
               OutlinedButton.icon(
                 onPressed: () async {
                   final colId = selectedColId;
@@ -1017,7 +1595,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   padding: const EdgeInsets.symmetric(vertical: 12),
                 ),
               ),
-
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 10),
                 child: Row(
@@ -1031,7 +1608,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   ],
                 ),
               ),
-
               TextField(
                 controller: contentCtrl,
                 maxLines: 3,
@@ -1107,7 +1683,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             collectionId: drift.Value(selectedColId),
                           ),
                         );
-                    if (customTitle.isEmpty) {
+                    if (customTitle.isEmpty && _enhancedPreview) {
                       _fetchTitleInBackground(itemId, cleanUrl);
                     }
                   } else {
