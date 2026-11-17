@@ -16,23 +16,23 @@ import io.flutter.embedding.android.FlutterActivity
 class MainActivity: FlutterActivity()
 """)
 
-# 1. 升級 Kotlin 至 2.1.0 與 Android Gradle Plugin (AGP) 至 8.3.2
+# 1. 升級 Kotlin 至 2.1.0 與 Android Gradle Plugin (AGP) 至 8.6.0（內建支援 Kotlin 2.1 Metadata 的新版 R8）
 for f in glob.glob("android/settings.gradle*"):
     s = open(f, encoding="utf-8").read()
     s = re.sub(r'(id\s+["\']org\.jetbrains\.kotlin\.android["\']\s+version\s+["\'])[^"\']+', r'\g<1>2.1.0', s)
-    s = re.sub(r'(id\s+["\']com\.android\.application["\']\s+version\s+["\'])[^"\']+', r'\g<1>8.3.2', s)
+    s = re.sub(r'(id\s+["\']com\.android\.application["\']\s+version\s+["\'])[^"\']+', r'\g<1>8.6.0', s)
     open(f, "w", encoding="utf-8").write(s)
 
-# 2. 升級 Gradle Wrapper 至 8.4
+# 2. 升級 Gradle Wrapper 至 8.7（搭配 AGP 8.6.0）
 wrapper_file = "android/gradle/wrapper/gradle-wrapper.properties"
 try:
     w = open(wrapper_file, encoding="utf-8").read()
-    w = re.sub(r'gradle-[0-9.]+-all\.zip', 'gradle-8.4-all.zip', w)
+    w = re.sub(r'gradle-[0-9.]+-all\.zip', 'gradle-8.7-all.zip', w)
     open(wrapper_file, "w", encoding="utf-8").write(w)
 except FileNotFoundError:
     pass
 
-# 3. 更新 app/build.gradle：升級 compileSdk 35、注入 signingConfigs.release 並強制替換 signingConfigs.debug
+# 3. 更新 app/build.gradle：升級 compileSdk 35、注入 signingConfigs.release 並關閉 R8 壓縮干擾
 for f in glob.glob("android/app/build.gradle*"):
     s = open(f, encoding="utf-8").read()
     s = re.sub(r'namespace\s*=?\s*["\'][^"\']+["\']', f'namespace = "{PACKAGE_NAME}"', s)
@@ -62,7 +62,10 @@ android {
         }
     }'''
     s = re.sub(r'android\s*\{', signing_setup.strip(), s, count=1)
-    s = re.sub(r'signingConfig\s*=?\s*signingConfigs\.debug', 'signingConfig = signingConfigs.release', s)
+    release_config = '''signingConfig = signingConfigs.release
+            minifyEnabled = false
+            shrinkResources = false'''
+    s = re.sub(r'signingConfig\s*=?\s*signingConfigs\.debug', release_config, s)
     open(f, "w", encoding="utf-8").write(s)
 
 # 4. 在 evaluationDependsOn 之前注入子專案規則，讓 Kotlin 自動對齊各套件的 Java targetCompatibility
@@ -99,4 +102,4 @@ subprojects {
 except FileNotFoundError:
     pass
 
-print("Release signingConfig and dynamic JVM target alignment applied successfully!")
+print("AGP 8.6.0, Gradle 8.7, and Release config applied successfully!")
