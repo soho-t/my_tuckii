@@ -29,6 +29,9 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+  static const MethodChannel _quickSaveChannel =
+      MethodChannel('io.github.sohot.mytuckii/quick_save');
+
   late ShareHandlerService _shareHandler;
   final TextEditingController _searchController = TextEditingController();
 
@@ -36,15 +39,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   String _selectedFilter = 'all';
   int? _selectedCollectionId;
   bool _isSyncing = false;
+  bool _isHandlingQuickSave = false;
 
   // 動態版本號與網頁 OG 封面圖快取
-  String _appVersion = '1.4.1';
+  String _appVersion = '1.5.0';
   Map<String, String> _linkCoverCache = {};
 
   // 外觀與收錄設定
   bool _highContrastMode = false;
   bool _enhancedPreview = true;
   bool _detectClipboardOnOpen = false;
+  bool _persistentClipNotif = false;
   String? _lastExportTime;
   String? _lastPromptedClipUrl;
 
@@ -69,6 +74,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+
+    _setupQuickSaveChannel();
 
     ReminderService.init(onTap: _handleNotificationPayload).then((_) async {
       final launchPayload = await ReminderService.getLaunchPayload();
@@ -114,15 +121,140 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           setState(() => _notifPermissionGranted = granted);
         }
       });
-      if (_detectClipboardOnOpen) {
+      if (_detectClipboardOnOpen && !_isHandlingQuickSave) {
         _checkClipboardForNewLink();
       }
     }
   }
 
+  void _setupQuickSaveChannel() {
+    _quickSaveChannel.setMethodCallHandler((call) async {
+      if (call.method == 'onQuickSaveTrigger') {
+        await _executeQuickClipboardSave(autoMinimize: true);
+      }
+    });
+
+    _quickSaveChannel.invokeMethod<bool>('consumePendingQuickSave').then((pending) {
+      if (pending == true && mounted) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _executeQuickClipboardSave(autoMinimize: true);
+        });
+      }
+    }).catchError((_) {});
+  }
+
+  /// 一鍵讀取剪貼簿存入資料庫，顯示原生 Toast 並自動退回原本的 App
+  Future<void> _executeQuickClipboardSave({required bool autoMinimize}) async {
+    if (_isHandlingQuickSave) return;
+    _isHandlingQuickSave = true;
+
+    try {
+      // 等待視窗取得焦點以符合 Android 10+ 剪貼簿權限規範
+      await Future.delayed(const Duration(milliseconds: 280));
+      final clipData = await Clipboard.getData(Clipboard.kTextPlain);
+      final rawText = clipData?.text?.trim() ?? '';
+
+      if (rawText.isEmpty) {
+        await _notifyNativeToast('剪貼簿目前沒有文字或連結', minimize: autoMinimize);
+        return;
+      }
+
+      final urlRegExp = RegExp(r'(https?:\/\/[^\s]+)');
+      final match = urlRegExp.firstMatch(rawText);
+
+      if (match != null) {
+        final cleanUrl = match.group(0)!;
+        final existing = await (widget.db.select(widget.db.savedItems)
+              ..where((t) => t.url.equals(cleanUrl) & t.isDeleted.equals(false)))
+            .get();
+
+        if (existing.isNotEmpty) {
+          await _notifyNativeToast('這個連結已經在隨手存裡了', minimize: autoMinimize);
+          return;
+        }
+
+        final itemId = await widget.db.into(widget.db.savedItems).insert(
+              SavedItemsCompanion.insert(
+                itemType: 'link',
+                url: drift.Value(cleanUrl),
+                title: drift.Value(cleanUrl),
+              ),
+            );
+        _lastPromptedClipUrl = cleanUrl;
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('setting_last_clip_url', cleanUrl);
+
+        if (_enhancedPreview) {
+          _fetchTitleInBackground(itemId, cleanUrl);
+        }
+        await _notifyNativeToast('已將連結存入隨手存！', minimize: autoMinimize);
+      } else {
+        final noteTitle =
+            rawText.length > 20 ? '${rawText.substring(0, 20)}...' : rawText;
+        await widget.db.into(widget.db.savedItems).insert(
+              SavedItemsCompanion.insert(
+                itemType: 'note',
+                title: drift.Value(noteTitle),
+                note: drift.Value(rawText),
+              ),
+            );
+        await _notifyNativeToast('已將剪貼簿文字存為筆記！', minimize: autoMinimize);
+      }
+    } catch (_) {
+      await _notifyNativeToast('讀取剪貼簿失敗，請再試一次', minimize: false);
+    } finally {
+      _isHandlingQuickSave = false;
+    }
+  }
+
+  Future<void> _notifyNativeToast(String message, {required bool minimize}) async {
+    try {
+      await _quickSaveChannel.invokeMethod('showToastAndMinimize', {
+        'message': message,
+        'minimize': minimize,
+      });
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
+        );
+      }
+    }
+  }
+
+  Future<void> _requestAddQuickSettingsTile() async {
+    String status = 'manual';
+    try {
+      status = await _quickSaveChannel.invokeMethod<String>('requestAddTile') ?? 'manual';
+    } catch (_) {}
+
+    if (!mounted) return;
+    if (status == 'manual') {
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('手動加入快速設定磚'),
+          content: const Text(
+            '1. 從螢幕最上方往下拉兩次，展開完整快速設定面板\n'
+            '2. 點擊面板上的「編輯（鉛筆圖示）」\n'
+            '3. 在下方找到「存進隨手存」方塊，按住拖曳到常用區即可',
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('我知道了'),
+            ),
+          ],
+        ),
+      );
+    }
+  }
+
   void _handleNotificationPayload(String payload) {
     if (!mounted) return;
-    if (payload == 'link_health') {
+    if (payload == 'quick_clip_save') {
+      _executeQuickClipboardSave(autoMinimize: true);
+    } else if (payload == 'link_health') {
       setState(() {
         _selectedFilter = 'all';
         _selectedCollectionId = null;
@@ -170,6 +302,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _highContrastMode = prefs.getBool('setting_high_contrast') ?? false;
       _enhancedPreview = prefs.getBool('setting_enhanced_preview') ?? true;
       _detectClipboardOnOpen = prefs.getBool('setting_detect_clipboard') ?? false;
+      _persistentClipNotif = prefs.getBool('setting_persistent_clip_notif') ?? false;
       _lastExportTime = prefs.getString('setting_last_export_time');
       _lastPromptedClipUrl = prefs.getString('setting_last_clip_url');
 
@@ -186,7 +319,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (granted) {
       ReminderService.rescheduleAll(widget.db);
     }
-    if (_detectClipboardOnOpen) {
+    if (_detectClipboardOnOpen && !_isHandlingQuickSave) {
       Future.delayed(const Duration(milliseconds: 600), _checkClipboardForNewLink);
     }
     if (_linkHealthCheckEnabled) {
@@ -854,6 +987,35 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                 if (mounted) setState(() {});
                                 if (val) _checkClipboardForNewLink();
                               },
+                            ),
+                            const Divider(),
+                            SwitchListTile(
+                              contentPadding: EdgeInsets.zero,
+                              title: const Text(
+                                '剪貼簿常駐通知',
+                                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                              ),
+                              subtitle: const Text('通知欄放一個「存剪貼簿」按鈕，在抖音、小紅書複製連結後一鍵存'),
+                              value: _persistentClipNotif,
+                              onChanged: (val) async {
+                                await _ensureNotifPermissionIfEnabling(val, setSheetState);
+                                final prefs = await SharedPreferences.getInstance();
+                                await prefs.setBool('setting_persistent_clip_notif', val);
+                                setSheetState(() => _persistentClipNotif = val);
+                                if (mounted) setState(() {});
+                                await ReminderService.setPersistentClipboardNotification(val);
+                              },
+                            ),
+                            const Divider(),
+                            ListTile(
+                              contentPadding: EdgeInsets.zero,
+                              title: const Text(
+                                '加入快速設定磚',
+                                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                              ),
+                              subtitle: const Text('下拉通知欄，點「存進隨手存」就能存剪貼簿裡的連結'),
+                              trailing: const Icon(Icons.chevron_right),
+                              onTap: _requestAddQuickSettingsTile,
                             ),
                           ],
                         ),

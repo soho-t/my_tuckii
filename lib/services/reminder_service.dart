@@ -21,6 +21,8 @@ class LinkHealthResult {
 }
 
 class ReminderService {
+  static const int persistentClipNotifId = 888;
+
   static final FlutterLocalNotificationsPlugin _plugin =
       FlutterLocalNotificationsPlugin();
   static bool _initialized = false;
@@ -77,7 +79,40 @@ class ReminderService {
     return granted ?? false;
   }
 
-  /// 重新排程所有本機通知（未來 14 天不重複每日回顧 + 通用文案每週提醒）
+  /// 開啟或關閉通知欄「存剪貼簿」常駐通知 (ID: 888)
+  static Future<void> setPersistentClipboardNotification(bool enabled) async {
+    await init();
+    if (!enabled) {
+      await _plugin.cancel(persistentClipNotifId);
+      return;
+    }
+
+    final granted = await isPermissionGranted();
+    if (!granted) return;
+
+    await _plugin.show(
+      persistentClipNotifId,
+      '隨手存 · 存剪貼簿',
+      '複製抖音、小紅書或網頁連結後，點這裡一鍵收藏',
+      const NotificationDetails(
+        android: AndroidNotificationDetails(
+          'persistent_clip_channel',
+          '剪貼簿快速收錄常駐列',
+          channelDescription: '在通知欄常駐一鍵存入剪貼簿的快捷按鈕',
+          importance: Importance.low,
+          priority: Priority.low,
+          ongoing: true,
+          autoCancel: false,
+          playSound: false,
+          enableVibration: false,
+          onlyAlertOnce: true,
+        ),
+      ),
+      payload: 'quick_clip_save',
+    );
+  }
+
+  /// 重新排程所有本機通知（並自動保留已開啟的剪貼簿常駐通知）
   static Future<void> rescheduleAll(AppDatabase db) async {
     await init();
     await _plugin.cancelAll();
@@ -94,6 +129,7 @@ class ReminderService {
     final staleDays = prefs.getInt('rem_stale_days') ?? 30;
 
     final weekendEnabled = prefs.getBool('rem_weekend_enabled') ?? false;
+    final persistentClip = prefs.getBool('setting_persistent_clip_notif') ?? false;
 
     final allItems = await (db.select(db.savedItems)
           ..where((t) => t.isDeleted.equals(false)))
@@ -138,7 +174,7 @@ class ReminderService {
       }
     }
 
-    // 2. 久未看提醒：每週日 20:00（採通用語氣，避免靜態數字失真）
+    // 2. 久未看提醒：每週日 20:00
     if (staleEnabled) {
       await _plugin.zonedSchedule(
         102,
@@ -162,7 +198,7 @@ class ReminderService {
       );
     }
 
-    // 3. 清單週末提醒：每週五 19:00（採通用語氣）
+    // 3. 清單週末提醒：每週五 19:00
     if (weekendEnabled) {
       await _plugin.zonedSchedule(
         103,
@@ -184,6 +220,11 @@ class ReminderService {
         matchDateTimeComponents: DateTimeComponents.dayOfWeekAndTime,
         payload: 'weekend_review',
       );
+    }
+
+    // 4. 若已啟用剪貼簿常駐通知，重新補回
+    if (persistentClip) {
+      await setPersistentClipboardNotification(true);
     }
   }
 
@@ -219,7 +260,6 @@ class ReminderService {
     );
   }
 
-  /// 分批並發掃描連結健康度（每批 5 條、略過已標記 #失效連結、支援即時進度回報）
   static Future<LinkHealthResult> runLinkHealthCheck(
     AppDatabase db, {
     bool requireWifi = false,
@@ -242,7 +282,6 @@ class ReminderService {
           ..where((t) => t.isDeleted.equals(false) & t.itemType.equals('link')))
         .get();
 
-    // 過濾出有效網址且尚未標記為失效連結的項目
     final targets = allLinks.where((item) {
       final rawUrl = item.url?.trim() ?? '';
       if (rawUrl.isEmpty || Uri.tryParse(rawUrl) == null) return false;
@@ -328,9 +367,7 @@ class ReminderService {
           isDead = true;
         }
       }
-    } catch (_) {
-      // 逾時或防爬蟲不誤判為失效
-    }
+    } catch (_) {}
 
     if (isDead) {
       final currentTags = item.tags ?? '';

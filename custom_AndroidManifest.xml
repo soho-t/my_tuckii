@@ -60,6 +60,17 @@
             </intent-filter>
         </activity>
 
+        <service
+            android:name=".QuickSaveTileService"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:label="存進隨手存"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
         <receiver
             android:exported="false"
             android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver" />
