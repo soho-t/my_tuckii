@@ -3,16 +3,16 @@ import os, re, glob, shutil
 PACKAGE_NAME = "io.github.sohot.mytuckii"
 PACKAGE_PATH = "android/app/src/main/kotlin/io/github/sohot/mytuckii"
 
-# 0. 生成 MainActivity.kt 與 QuickSaveTileService.kt
+# 0. 生成 MainActivity.kt、QuickSaveTileService.kt、QuickSaveWidgetProvider.kt 與小工具 XML
 kotlin_root = "android/app/src/main/kotlin"
 if os.path.exists(kotlin_root):
     shutil.rmtree(kotlin_root)
 os.makedirs(PACKAGE_PATH, exist_ok=True)
 
-with open(f"{PACKAGE_PATH}/MainActivity.kt", "w", encoding="utf-8") as f:
-    f.write(f"""package {PACKAGE_NAME}
+main_activity_kt = """package __PKG__
 
 import android.app.StatusBarManager
+import android.appwidget.AppWidgetManager
 import android.content.ComponentName
 import android.content.Intent
 import android.graphics.drawable.Icon
@@ -23,85 +23,100 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
-class MainActivity : FlutterActivity() {{
-    companion object {{
+class MainActivity : FlutterActivity() {
+    companion object {
         const val CHANNEL = "io.github.sohot.mytuckii/quick_save"
         const val ACTION_QUICK_SAVE = "io.github.sohot.mytuckii.ACTION_QUICK_SAVE"
-    }}
+    }
 
     private var quickSaveChannel: MethodChannel? = null
     private var pendingQuickSave: Boolean = false
 
-    override fun onCreate(savedInstanceState: Bundle?) {{
+    override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (intent?.action == ACTION_QUICK_SAVE) {{
+        if (intent?.action == ACTION_QUICK_SAVE) {
             pendingQuickSave = true
-        }}
-    }}
+        }
+    }
 
-    override fun onNewIntent(intent: Intent) {{
+    override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        if (intent.action == ACTION_QUICK_SAVE) {{
+        if (intent.action == ACTION_QUICK_SAVE) {
             val ch = quickSaveChannel
-            if (ch != null) {{
+            if (ch != null) {
                 ch.invokeMethod("onQuickSaveTrigger", null)
-            }} else {{
+            } else {
                 pendingQuickSave = true
-            }}
-        }}
-    }}
+            }
+        }
+    }
 
-    override fun configureFlutterEngine(flutterEngine: FlutterEngine) {{
+    override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         quickSaveChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
-        quickSaveChannel?.setMethodCallHandler {{ call, result ->
-            when (call.method) {{
-                "consumePendingQuickSave" -> {{
+        quickSaveChannel?.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "consumePendingQuickSave" -> {
                     val value = pendingQuickSave
                     pendingQuickSave = false
                     result.success(value)
-                }}
-                "showToastAndMinimize" -> {{
+                }
+                "showToastAndMinimize" -> {
                     val message = call.argument<String>("message") ?: ""
                     val minimize = call.argument<Boolean>("minimize") ?: false
-                    if (message.isNotEmpty()) {{
+                    if (message.isNotEmpty()) {
                         Toast.makeText(applicationContext, message, Toast.LENGTH_SHORT).show()
-                    }}
-                    if (minimize) {{
+                    }
+                    if (minimize) {
                         moveTaskToBack(true)
-                    }}
+                    }
                     result.success(null)
-                }}
-                "requestAddTile" -> {{
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {{
-                        try {{
+                }
+                "requestAddTile" -> {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        try {
                             val statusBarManager = getSystemService(StatusBarManager::class.java)
                             statusBarManager.requestAddTileService(
                                 ComponentName(this, QuickSaveTileService::class.java),
                                 "存進隨手存",
                                 Icon.createWithResource(this, R.mipmap.ic_launcher),
                                 mainExecutor
-                            ) {{ status ->
-                                // 系統會自動顯示加入結果
-                            }}
+                            ) { _ -> }
                             result.success("requested")
-                        }} catch (e: Exception) {{
+                        } catch (e: Exception) {
                             result.success("manual")
-                        }}
-                    }} else {{
+                        }
+                    } else {
                         result.success("manual")
-                    }}
-                }}
+                    }
+                }
+                "requestPinWidget" -> {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        try {
+                            val appWidgetManager = AppWidgetManager.getInstance(this)
+                            val provider = ComponentName(this, QuickSaveWidgetProvider::class.java)
+                            if (appWidgetManager.isRequestPinAppWidgetSupported) {
+                                appWidgetManager.requestPinAppWidget(provider, null, null)
+                                result.success("requested")
+                            } else {
+                                result.success("manual")
+                            }
+                        } catch (e: Exception) {
+                            result.success("manual")
+                        }
+                    } else {
+                        result.success("manual")
+                    }
+                }
                 else -> result.notImplemented()
-            }}
-        }}
-    }}
-}}
-""")
+            }
+        }
+    }
+}
+""".replace("__PKG__", PACKAGE_NAME)
 
-with open(f"{PACKAGE_PATH}/QuickSaveTileService.kt", "w", encoding="utf-8") as f:
-    f.write(f"""package {PACKAGE_NAME}
+tile_service_kt = """package __PKG__
 
 import android.app.PendingIntent
 import android.content.Intent
@@ -109,24 +124,24 @@ import android.os.Build
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 
-class QuickSaveTileService : TileService() {{
-    override fun onStartListening() {{
+class QuickSaveTileService : TileService() {
+    override fun onStartListening() {
         super.onStartListening()
-        qsTile?.let {{ tile ->
+        qsTile?.let { tile ->
             tile.state = Tile.STATE_INACTIVE
             tile.label = "存進隨手存"
             tile.updateTile()
-        }}
-    }}
+        }
+    }
 
-    override fun onClick() {{
+    override fun onClick() {
         super.onClick()
-        val intent = Intent(this, MainActivity::class.java).apply {{
+        val intent = Intent(this, MainActivity::class.java).apply {
             action = MainActivity.ACTION_QUICK_SAVE
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-        }}
+        }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {{
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             val pendingIntent = PendingIntent.getActivity(
                 this,
                 1001,
@@ -134,12 +149,109 @@ class QuickSaveTileService : TileService() {{
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
             startActivityAndCollapse(pendingIntent)
-        }} else {{
+        } else {
             @Suppress("DEPRECATION")
             startActivityAndCollapse(intent)
-        }}
-    }}
-}}
+        }
+    }
+}
+""".replace("__PKG__", PACKAGE_NAME)
+
+widget_provider_kt = """package __PKG__
+
+import android.app.PendingIntent
+import android.appwidget.AppWidgetManager
+import android.appwidget.AppWidgetProvider
+import android.content.Context
+import android.content.Intent
+import android.widget.RemoteViews
+
+class QuickSaveWidgetProvider : AppWidgetProvider() {
+    override fun onUpdate(
+        context: Context,
+        appWidgetManager: AppWidgetManager,
+        appWidgetIds: IntArray
+    ) {
+        for (appWidgetId in appWidgetIds) {
+            val intent = Intent(context, MainActivity::class.java).apply {
+                action = MainActivity.ACTION_QUICK_SAVE
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            }
+            val pendingIntent = PendingIntent.getActivity(
+                context,
+                2001,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            val views = RemoteViews(context.packageName, R.layout.widget_quick_save)
+            views.setOnClickPendingIntent(R.id.widget_root, pendingIntent)
+            appWidgetManager.updateAppWidget(appWidgetId, views)
+        }
+    }
+}
+""".replace("__PKG__", PACKAGE_NAME)
+
+with open(f"{PACKAGE_PATH}/MainActivity.kt", "w", encoding="utf-8") as f:
+    f.write(main_activity_kt)
+with open(f"{PACKAGE_PATH}/QuickSaveTileService.kt", "w", encoding="utf-8") as f:
+    f.write(tile_service_kt)
+with open(f"{PACKAGE_PATH}/QuickSaveWidgetProvider.kt", "w", encoding="utf-8") as f:
+    f.write(widget_provider_kt)
+
+# 建立桌面小工具 XML 資源檔
+res_root = "android/app/src/main/res"
+os.makedirs(f"{res_root}/drawable", exist_ok=True)
+os.makedirs(f"{res_root}/layout", exist_ok=True)
+os.makedirs(f"{res_root}/xml", exist_ok=True)
+
+with open(f"{res_root}/drawable/widget_quick_save_bg.xml", "w", encoding="utf-8") as f:
+    f.write("""<?xml version="1.0" encoding="utf-8"?>
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="#FAF7F2"/>
+    <stroke android:width="1.5dp" android:color="#D6C7B2"/>
+    <corners android:radius="20dp"/>
+</shape>
+""")
+
+with open(f"{res_root}/layout/widget_quick_save.xml", "w", encoding="utf-8") as f:
+    f.write("""<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_quick_save_bg"
+    android:gravity="center"
+    android:orientation="horizontal"
+    android:padding="10dp">
+
+    <ImageView
+        android:layout_width="26dp"
+        android:layout_height="26dp"
+        android:src="@mipmap/ic_launcher"
+        android:contentDescription="隨手存" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="8dp"
+        android:text="存剪貼簿"
+        android:textColor="#3E2F20"
+        android:textSize="14sp"
+        android:textStyle="bold" />
+</LinearLayout>
+""")
+
+with open(f"{res_root}/xml/widget_quick_save_info.xml", "w", encoding="utf-8") as f:
+    f.write("""<?xml version="1.0" encoding="utf-8"?>
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="110dp"
+    android:minHeight="40dp"
+    android:targetCellWidth="2"
+    android:targetCellHeight="1"
+    android:updatePeriodMillis="0"
+    android:initialLayout="@layout/widget_quick_save"
+    android:resizeMode="horizontal|vertical"
+    android:widgetCategory="home_screen" />
 """)
 
 # 1. 設定最穩定的黃金組合：Kotlin 1.9.24 + AGP 8.3.2
@@ -252,4 +364,4 @@ subprojects {
 except FileNotFoundError:
     pass
 
-print("MainActivity, QuickSaveTileService, and Gradle config applied successfully!")
+print("Widget, TileService, MainActivity, and Gradle config applied successfully!")

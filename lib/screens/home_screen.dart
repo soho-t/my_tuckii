@@ -13,6 +13,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../database/app_database.dart';
 import '../main.dart';
+import '../services/ai_organizer_service.dart';
 import '../services/backup_service.dart';
 import '../services/bookmark_importer.dart';
 import '../services/google_drive_sync_service.dart';
@@ -42,7 +43,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _isHandlingQuickSave = false;
 
   // 動態版本號與網頁 OG 封面圖快取
-  String _appVersion = '1.5.0';
+  String _appVersion = '1.6.0';
   Map<String, String> _linkCoverCache = {};
 
   // 外觀與收錄設定
@@ -52,6 +53,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _persistentClipNotif = false;
   String? _lastExportTime;
   String? _lastPromptedClipUrl;
+
+  // AI 智慧整理設定
+  String _geminiApiKey = '';
+  bool _aiAutoTagEnabled = false;
+  bool _isAiOrganizing = false;
+  int _aiCurrent = 0;
+  int _aiTotal = 0;
 
   // 提醒與連結健康檢查狀態
   bool _notifPermissionGranted = false;
@@ -143,13 +151,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }).catchError((_) {});
   }
 
-  /// 一鍵讀取剪貼簿存入資料庫，顯示原生 Toast 並自動退回原本的 App
   Future<void> _executeQuickClipboardSave({required bool autoMinimize}) async {
     if (_isHandlingQuickSave) return;
     _isHandlingQuickSave = true;
 
     try {
-      // 等待視窗取得焦點以符合 Android 10+ 剪貼簿權限規範
       await Future.delayed(const Duration(milliseconds: 280));
       final clipData = await Clipboard.getData(Clipboard.kTextPlain);
       final rawText = clipData?.text?.trim() ?? '';
@@ -185,19 +191,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         await prefs.setString('setting_last_clip_url', cleanUrl);
 
         if (_enhancedPreview) {
-          _fetchTitleInBackground(itemId, cleanUrl);
+          _fetchTitleInBackground(itemId, cleanUrl, triggerAiTag: true);
+        } else if (_aiAutoTagEnabled && _geminiApiKey.isNotEmpty) {
+          AiOrganizerService.organizeSingleItemById(widget.db, itemId).catchError((_) => false);
         }
         await _notifyNativeToast('已將連結存入隨手存！', minimize: autoMinimize);
       } else {
         final noteTitle =
             rawText.length > 20 ? '${rawText.substring(0, 20)}...' : rawText;
-        await widget.db.into(widget.db.savedItems).insert(
+        final itemId = await widget.db.into(widget.db.savedItems).insert(
               SavedItemsCompanion.insert(
                 itemType: 'note',
                 title: drift.Value(noteTitle),
                 note: drift.Value(rawText),
               ),
             );
+        if (_aiAutoTagEnabled && _geminiApiKey.isNotEmpty) {
+          AiOrganizerService.organizeSingleItemById(widget.db, itemId).catchError((_) => false);
+        }
         await _notifyNativeToast('已將剪貼簿文字存為筆記！', minimize: autoMinimize);
       }
     } catch (_) {
@@ -250,6 +261,92 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _requestPinHomeWidget() async {
+    String status = 'manual';
+    try {
+      status = await _quickSaveChannel.invokeMethod<String>('requestPinWidget') ?? 'manual';
+    } catch (_) {}
+
+    if (!mounted) return;
+    if (status == 'manual') {
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('手動加入桌面小工具'),
+          content: const Text(
+            '1. 回到手機桌面，長按空白處\n'
+            '2. 點選下方的「小工具（Widgets）」\n'
+            '3. 找到「隨手存 · 存剪貼簿」，拖曳放到桌面即可一鍵存剪貼簿',
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('我知道了'),
+            ),
+          ],
+        ),
+      );
+    }
+  }
+
+  Future<void> _showGeminiApiKeyDialog(StateSetter setSheetState) async {
+    final keyCtrl = TextEditingController(text: _geminiApiKey);
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('設定 Gemini API Key'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              '金鑰僅儲存在這支手機本機，用於呼叫 Gemini 2.5 Flash 自動產生標籤與歸類。',
+              style: TextStyle(fontSize: 13),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: keyCtrl,
+              obscureText: true,
+              decoration: const InputDecoration(
+                labelText: 'Gemini API Key',
+                hintText: '貼上 AIza... 開頭的金鑰',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 6),
+            TextButton.icon(
+              onPressed: () => launchUrl(
+                Uri.parse('[https://aistudio.google.com/apikey](https://aistudio.google.com/apikey)'),
+                mode: LaunchMode.externalApplication,
+              ),
+              icon: const Icon(Icons.open_in_new, size: 16),
+              label: const Text('前往 Google AI Studio 免費申請金鑰', style: TextStyle(fontSize: 12)),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('儲存'),
+          ),
+        ],
+      ),
+    );
+
+    if (saved == true) {
+      final newKey = keyCtrl.text.trim();
+      await AiOrganizerService.saveApiKey(newKey);
+      setSheetState(() => _geminiApiKey = newKey);
+      if (mounted) {
+        setState(() => _geminiApiKey = newKey);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(newKey.isEmpty ? '已清除 API Key' : '已儲存 Gemini API Key')),
+        );
+      }
+    }
+  }
+
   void _handleNotificationPayload(String payload) {
     if (!mounted) return;
     if (payload == 'quick_clip_save') {
@@ -274,6 +371,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _loadAppSettings() async {
     final prefs = await SharedPreferences.getInstance();
     final granted = await ReminderService.isPermissionGranted();
+    final apiKey = await AiOrganizerService.getApiKey();
+    final aiAutoTag = await AiOrganizerService.isAutoTagEnabled();
 
     String detectedVersion = _appVersion;
     try {
@@ -305,6 +404,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _persistentClipNotif = prefs.getBool('setting_persistent_clip_notif') ?? false;
       _lastExportTime = prefs.getString('setting_last_export_time');
       _lastPromptedClipUrl = prefs.getString('setting_last_clip_url');
+
+      _geminiApiKey = apiKey;
+      _aiAutoTagEnabled = aiAutoTag;
 
       _notifPermissionGranted = granted;
       _dailyReviewEnabled = prefs.getBool('rem_daily_enabled') ?? true;
@@ -405,7 +507,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     ),
                   );
               if (_enhancedPreview) {
-                _fetchTitleInBackground(itemId, detectedUrl);
+                _fetchTitleInBackground(itemId, detectedUrl, triggerAiTag: true);
+              } else if (_aiAutoTagEnabled && _geminiApiKey.isNotEmpty) {
+                AiOrganizerService.organizeSingleItemById(widget.db, itemId).catchError((_) => false);
               }
             },
           ),
@@ -952,6 +1056,118 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
                       const SizedBox(height: 20),
 
+                      _buildSectionHeader('✨ AI 智慧整理'),
+                      _buildSettingsCard(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            ListTile(
+                              contentPadding: EdgeInsets.zero,
+                              leading: const Icon(Icons.key_outlined, color: Color(0xFF7A5C3E)),
+                              title: const Text(
+                                'Gemini API Key',
+                                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                              ),
+                              subtitle: Text(
+                                _geminiApiKey.isEmpty
+                                    ? '尚未設定（填入個人免費金鑰即可啟用）'
+                                    : '已設定 (${_geminiApiKey.length > 8 ? '${_geminiApiKey.substring(0, 6)}••••' : '••••'})',
+                              ),
+                              trailing: const Icon(Icons.chevron_right),
+                              onTap: () => _showGeminiApiKeyDialog(setSheetState),
+                            ),
+                            const Divider(),
+                            SwitchListTile(
+                              contentPadding: EdgeInsets.zero,
+                              title: const Text(
+                                '新增時自動 AI 整理標籤',
+                                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                              ),
+                              subtitle: const Text('存入連結或筆記後，自動交給 Gemini 產生標籤並歸入合適收藏夾'),
+                              value: _aiAutoTagEnabled,
+                              onChanged: (val) async {
+                                if (val && _geminiApiKey.isEmpty) {
+                                  await _showGeminiApiKeyDialog(setSheetState);
+                                  if (_geminiApiKey.isEmpty) return;
+                                }
+                                await AiOrganizerService.setAutoTagEnabled(val);
+                                setSheetState(() => _aiAutoTagEnabled = val);
+                                if (mounted) setState(() {});
+                              },
+                            ),
+                            const SizedBox(height: 8),
+                            SizedBox(
+                              width: double.infinity,
+                              child: OutlinedButton.icon(
+                                onPressed: _isAiOrganizing
+                                    ? null
+                                    : () async {
+                                        if (_geminiApiKey.isEmpty) {
+                                          await _showGeminiApiKeyDialog(setSheetState);
+                                          if (_geminiApiKey.isEmpty) return;
+                                        }
+                                        setSheetState(() {
+                                          _isAiOrganizing = true;
+                                          _aiCurrent = 0;
+                                          _aiTotal = 0;
+                                        });
+                                        try {
+                                          final done = await AiOrganizerService.organizeUntaggedItems(
+                                            widget.db,
+                                            onProgress: (cur, tot) {
+                                              if (ctx.mounted) {
+                                                setSheetState(() {
+                                                  _aiCurrent = cur;
+                                                  _aiTotal = tot;
+                                                });
+                                              }
+                                            },
+                                          );
+                                          if (mounted) {
+                                            ScaffoldMessenger.of(context).showSnackBar(
+                                              SnackBar(
+                                                content: Text(
+                                                  done > 0
+                                                      ? 'AI 整理完成！已為 $done 筆收藏補上標籤與分類。'
+                                                      : '目前沒有需要整理的無標籤收藏。',
+                                                ),
+                                              ),
+                                            );
+                                          }
+                                        } catch (e) {
+                                          if (mounted) {
+                                            ScaffoldMessenger.of(context).showSnackBar(
+                                              SnackBar(content: Text('AI 整理失敗：$e')),
+                                            );
+                                          }
+                                        } finally {
+                                          if (ctx.mounted) {
+                                            setSheetState(() => _isAiOrganizing = false);
+                                          }
+                                        }
+                                      },
+                                icon: _isAiOrganizing
+                                    ? const SizedBox(
+                                        width: 16,
+                                        height: 16,
+                                        child: CircularProgressIndicator(strokeWidth: 2),
+                                      )
+                                    : const Icon(Icons.auto_awesome, size: 18),
+                                label: Text(
+                                  _isAiOrganizing
+                                      ? (_aiTotal > 0
+                                          ? 'AI 整理中 ($_aiCurrent / $_aiTotal)...'
+                                          : '準備呼叫 Gemini...')
+                                      : '一鍵整理所有無標籤收藏',
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+
+                      const SizedBox(height: 20),
+
                       _buildSectionHeader('收錄'),
                       _buildSettingsCard(
                         child: Column(
@@ -1016,6 +1232,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               subtitle: const Text('下拉通知欄，點「存進隨手存」就能存剪貼簿裡的連結'),
                               trailing: const Icon(Icons.chevron_right),
                               onTap: _requestAddQuickSettingsTile,
+                            ),
+                            const Divider(),
+                            ListTile(
+                              contentPadding: EdgeInsets.zero,
+                              title: const Text(
+                                '加到桌面小工具',
+                                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                              ),
+                              subtitle: const Text('桌面上放一個「存剪貼簿」按鈕，隨時一鍵存入'),
+                              trailing: const Icon(Icons.chevron_right),
+                              onTap: _requestPinHomeWidget,
                             ),
                           ],
                         ),
@@ -1416,7 +1643,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               title: const Text('隱私權政策與專案首頁'),
                               trailing: const Icon(Icons.open_in_new, size: 18),
                               onTap: () => launchUrl(
-                                Uri.parse('https://github.com/soho-t/my_tuckii'),
+                                Uri.parse('[https://github.com/soho-t/my_tuckii](https://github.com/soho-t/my_tuckii)'),
                                 mode: LaunchMode.externalApplication,
                               ),
                             ),
@@ -1974,6 +2201,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     final allCollections = await widget.db.select(widget.db.collections).get();
     int? selectedColId = item.collectionId;
+    bool isGeneratingAi = false;
 
     if (!mounted) return;
 
@@ -2043,9 +2271,61 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               const SizedBox(height: 12),
               TextField(
                 controller: tagsCtrl,
-                decoration: const InputDecoration(
+                decoration: InputDecoration(
                   labelText: '標籤 (方便搜尋，如：合約, 報表)',
-                  border: OutlineInputBorder(),
+                  border: const OutlineInputBorder(),
+                  suffixIcon: IconButton(
+                    tooltip: 'AI 自動產生標籤與歸類',
+                    onPressed: isGeneratingAi
+                        ? null
+                        : () async {
+                            if (_geminiApiKey.isEmpty) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('請先至右上角「設定 → AI 智慧整理」填入 Gemini API Key')),
+                              );
+                              return;
+                            }
+                            setModalState(() => isGeneratingAi = true);
+                            try {
+                              final res = await AiOrganizerService.suggestTags(
+                                title: titleCtrl.text.trim(),
+                                url: item.url,
+                                note: noteCtrl.text.trim(),
+                                existingCollections: allCollections.map((c) => c.name).toList(),
+                              );
+                              if (res != null && ctx.mounted) {
+                                setModalState(() {
+                                  if (res.tags.isNotEmpty) {
+                                    tagsCtrl.text = res.tags.join(', ');
+                                  }
+                                  if (selectedColId == null && res.suggestedCollection != null) {
+                                    for (final col in allCollections) {
+                                      if (col.name == res.suggestedCollection) {
+                                        selectedColId = col.id;
+                                        break;
+                                      }
+                                    }
+                                  }
+                                });
+                              }
+                            } catch (e) {
+                              if (mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text('AI 產生失敗：$e')),
+                                );
+                              }
+                            } finally {
+                              if (ctx.mounted) setModalState(() => isGeneratingAi = false);
+                            }
+                          },
+                    icon: isGeneratingAi
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.auto_awesome, color: Color(0xFF8C6239)),
+                  ),
                 ),
               ),
               const SizedBox(height: 12),
@@ -2243,6 +2523,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
                   final customTitle = titleCtrl.text.trim();
                   final tags = tagsCtrl.text.trim();
+                  final shouldAutoTag = tags.isEmpty && _aiAutoTagEnabled && _geminiApiKey.isNotEmpty;
 
                   final urlRegExp = RegExp(r'(https?:\/\/[^\s]+)');
                   final match = urlRegExp.firstMatch(rawInput);
@@ -2263,14 +2544,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         itemId,
                         cleanUrl,
                         updateTitle: customTitle.isEmpty,
+                        triggerAiTag: shouldAutoTag,
                       );
+                    } else if (shouldAutoTag) {
+                      AiOrganizerService.organizeSingleItemById(widget.db, itemId).catchError((_) => false);
                     }
                   } else {
                     final noteTitle = customTitle.isNotEmpty
                         ? customTitle
                         : (rawInput.length > 20 ? '${rawInput.substring(0, 20)}...' : rawInput);
 
-                    await widget.db.into(widget.db.savedItems).insert(
+                    final itemId = await widget.db.into(widget.db.savedItems).insert(
                           SavedItemsCompanion.insert(
                             itemType: 'note',
                             title: drift.Value(noteTitle),
@@ -2279,6 +2563,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             collectionId: drift.Value(selectedColId),
                           ),
                         );
+                    if (shouldAutoTag) {
+                      AiOrganizerService.organizeSingleItemById(widget.db, itemId).catchError((_) => false);
+                    }
                   }
 
                   if (ctx.mounted) Navigator.pop(ctx);
@@ -2297,25 +2584,32 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     int itemId,
     String url, {
     bool updateTitle = true,
+    bool triggerAiTag = false,
   }) async {
     try {
       final data = await MetadataFetch.extract(url);
-      if (data == null) return;
+      if (data != null) {
+        if (data.image != null && data.image!.trim().isNotEmpty) {
+          await _saveLinkCover(url, data.image!.trim());
+        }
 
-      if (data.image != null && data.image!.trim().isNotEmpty) {
-        await _saveLinkCover(url, data.image!.trim());
-      }
-
-      if (updateTitle && data.title != null && data.title!.trim().isNotEmpty) {
-        await (widget.db.update(widget.db.savedItems)..where((t) => t.id.equals(itemId))).write(
-          SavedItemsCompanion(
-            title: drift.Value(data.title!.trim()),
-            note: drift.Value(data.description?.trim()),
-            updatedAt: drift.Value(DateTime.now()),
-          ),
-        );
+        if (updateTitle && data.title != null && data.title!.trim().isNotEmpty) {
+          await (widget.db.update(widget.db.savedItems)..where((t) => t.id.equals(itemId))).write(
+            SavedItemsCompanion(
+              title: drift.Value(data.title!.trim()),
+              note: drift.Value(data.description?.trim()),
+              updatedAt: drift.Value(DateTime.now()),
+            ),
+          );
+        }
       }
     } catch (_) {}
+
+    if (triggerAiTag && _aiAutoTagEnabled && _geminiApiKey.isNotEmpty) {
+      try {
+        await AiOrganizerService.organizeSingleItemById(widget.db, itemId);
+      } catch (_) {}
+    }
   }
 
   void _showCreateCollectionDialog() {
