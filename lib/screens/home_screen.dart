@@ -19,6 +19,7 @@ import '../services/bookmark_importer.dart';
 import '../services/google_drive_sync_service.dart';
 import '../services/reminder_service.dart';
 import '../services/share_handler.dart';
+import '../services/update_service.dart';
 import 'focus_mode_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -41,9 +42,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   int? _selectedCollectionId;
   bool _isSyncing = false;
   bool _isHandlingQuickSave = false;
+  bool _isCheckingUpdate = false;
 
   // 動態版本號與網頁 OG 封面圖快取
-  String _appVersion = '1.6.0';
+  String _appVersion = '1.6.1';
   Map<String, String> _linkCoverCache = {};
 
   // 外觀與收錄設定
@@ -289,6 +291,70 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _checkUpdateOnStartup() async {
+    if (_isHandlingQuickSave) return;
+    try {
+      if (!await UpdateService.shouldAutoCheck()) return;
+      final info = await UpdateService.checkForUpdate(isManual: false);
+      if (info != null && info.hasUpdate && mounted) {
+        _showUpdateDialog(info);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _showUpdateDialog(AppUpdateInfo info) async {
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('發現新版本 v${info.latestVersion}'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '目前版本：v${info.currentVersion}',
+                style: TextStyle(color: Colors.grey.shade700, fontSize: 13),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                info.releaseNotes.isNotEmpty
+                    ? info.releaseNotes
+                    : '已發布新版安裝檔，下載後直接覆蓋安裝即可保留所有資料。',
+                style: const TextStyle(fontSize: 14, height: 1.45),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              await UpdateService.skipVersion(info.latestVersion);
+              if (ctx.mounted) Navigator.pop(ctx);
+            },
+            child: const Text('略過此版'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('稍後再說'),
+          ),
+          FilledButton.icon(
+            onPressed: () async {
+              Navigator.pop(ctx);
+              final uri = Uri.tryParse(info.downloadUrl);
+              if (uri != null) {
+                await launchUrl(uri, mode: LaunchMode.externalApplication);
+              }
+            },
+            icon: const Icon(Icons.download_rounded, size: 18),
+            label: const Text('下載新版 APK'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _showGeminiApiKeyDialog(StateSetter setSheetState) async {
     final keyCtrl = TextEditingController(text: _geminiApiKey);
     final saved = await showDialog<bool>(
@@ -316,7 +382,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             const SizedBox(height: 6),
             TextButton.icon(
               onPressed: () => launchUrl(
-                Uri.parse('[https://aistudio.google.com/apikey](https://aistudio.google.com/apikey)'),
+                Uri.parse('https://aistudio.google.com/apikey'),
                 mode: LaunchMode.externalApplication,
               ),
               icon: const Icon(Icons.open_in_new, size: 16),
@@ -427,6 +493,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (_linkHealthCheckEnabled) {
       _autoRunWeeklyLinkHealthCheck(prefs);
     }
+    Future.delayed(const Duration(seconds: 2), _checkUpdateOnStartup);
   }
 
   Future<void> _saveLinkCover(String url, String imageUrl) async {
@@ -1628,6 +1695,52 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             const Divider(height: 20),
                             ListTile(
                               contentPadding: EdgeInsets.zero,
+                              leading: _isCheckingUpdate
+                                  ? const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(strokeWidth: 2),
+                                    )
+                                  : const Icon(Icons.system_update_outlined, color: Color(0xFF7A5C3E)),
+                              title: const Text(
+                                '檢查更新',
+                                style: TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                              subtitle: const Text('檢查 GitHub Releases 是否有新版 APK'),
+                              trailing: const Icon(Icons.chevron_right),
+                              onTap: _isCheckingUpdate
+                                  ? null
+                                  : () async {
+                                      setSheetState(() => _isCheckingUpdate = true);
+                                      try {
+                                        final info = await UpdateService.checkForUpdate(isManual: true);
+                                        if (!mounted) return;
+                                        if (info != null && info.hasUpdate) {
+                                          if (ctx.mounted) Navigator.pop(ctx);
+                                          await _showUpdateDialog(info);
+                                        } else {
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            SnackBar(
+                                              content: Text('目前已是最新版本 (v${info?.currentVersion ?? _appVersion})'),
+                                            ),
+                                          );
+                                        }
+                                      } catch (e) {
+                                        if (mounted) {
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            SnackBar(content: Text('檢查更新失敗：$e')),
+                                          );
+                                        }
+                                      } finally {
+                                        if (ctx.mounted) {
+                                          setSheetState(() => _isCheckingUpdate = false);
+                                        }
+                                      }
+                                    },
+                            ),
+                            const Divider(height: 8),
+                            ListTile(
+                              contentPadding: EdgeInsets.zero,
                               leading: const Icon(Icons.coffee_outlined, color: Color(0xFF7A5C3E)),
                               title: const Text(
                                 '請作者喝杯咖啡',
@@ -1643,7 +1756,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               title: const Text('隱私權政策與專案首頁'),
                               trailing: const Icon(Icons.open_in_new, size: 18),
                               onTap: () => launchUrl(
-                                Uri.parse('[https://github.com/soho-t/my_tuckii](https://github.com/soho-t/my_tuckii)'),
+                                Uri.parse('https://github.com/soho-t/my_tuckii'),
                                 mode: LaunchMode.externalApplication,
                               ),
                             ),
