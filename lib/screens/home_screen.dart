@@ -48,7 +48,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   int _dailyReviewHour = 21;
   int _dailyReviewMinute = 0;
   bool _staleReminderEnabled = true;
-  int _staleDays = 30; // 14, 30, 60
+  int _staleDays = 30;
   bool _weekendReminderEnabled = false;
   bool _linkHealthCheckEnabled = false;
   bool _isCheckingLinks = false;
@@ -61,6 +61,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+
+    ReminderService.init(onTap: _handleNotificationPayload).then((_) async {
+      final launchPayload = await ReminderService.getLaunchPayload();
+      if (launchPayload != null && mounted) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _handleNotificationPayload(launchPayload);
+        });
+      }
+    });
+
     _loadAppSettings();
 
     GoogleDriveSyncService.signInSilently().then((_) {
@@ -102,6 +112,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
+  void _handleNotificationPayload(String payload) {
+    if (!mounted) return;
+    if (payload == 'link_health') {
+      setState(() {
+        _selectedFilter = 'all';
+        _selectedCollectionId = null;
+        _searchController.text = '失效連結';
+        _searchQuery = '失效連結';
+      });
+    } else {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => FocusModeScreen(db: widget.db),
+        ),
+      );
+    }
+  }
+
   Future<void> _loadAppSettings() async {
     final prefs = await SharedPreferences.getInstance();
     final granted = await ReminderService.isPermissionGranted();
@@ -138,8 +167,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final lastCheckMs = prefs.getInt('rem_last_link_check_ms') ?? 0;
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     if (nowMs - lastCheckMs > const Duration(days: 7).inMilliseconds) {
-      await prefs.setInt('rem_last_link_check_ms', nowMs);
-      await ReminderService.runLinkHealthCheck(widget.db);
+      final res = await ReminderService.runLinkHealthCheck(
+        widget.db,
+        requireWifi: true,
+      );
+      if (!res.skippedNoWifi) {
+        await prefs.setInt('rem_last_link_check_ms', nowMs);
+      }
     }
   }
 
@@ -542,7 +576,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return '$h:$m';
   }
 
-  /// 溫潤質感「設定中心」底部面板（含第二階段「提醒」引擎）
   void _showSettingsBottomSheet() {
     showModalBottomSheet(
       context: context,
@@ -597,7 +630,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     controller: scrollController,
                     padding: const EdgeInsets.fromLTRB(20, 4, 20, 32),
                     children: [
-                      // 1. 帳號區塊
                       _buildSectionHeader('帳號'),
                       _buildSettingsCard(
                         child: Column(
@@ -714,7 +746,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
                       const SizedBox(height: 20),
 
-                      // 2. 外觀區塊
                       _buildSectionHeader('外觀'),
                       _buildSettingsCard(
                         child: SwitchListTile(
@@ -736,7 +767,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
                       const SizedBox(height: 20),
 
-                      // 3. 收錄區塊
                       _buildSectionHeader('收錄'),
                       _buildSettingsCard(
                         child: Column(
@@ -779,7 +809,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
                       const SizedBox(height: 20),
 
-                      // 4. 第二階段：提醒與通知區塊
                       _buildSectionHeader('🔔 提醒'),
                       _buildSettingsCard(
                         child: Column(
@@ -820,14 +849,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               const SizedBox(height: 12),
                             ],
 
-                            // 每日回顧
                             SwitchListTile(
                               contentPadding: EdgeInsets.zero,
                               title: const Text(
                                 '每日回顧',
                                 style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
                               ),
-                              subtitle: Text('每天約 $timeStr 挑 1–3 則舊收藏給你'),
+                              subtitle: Text('每天約 $timeStr 隨機挑 1–3 則舊收藏給你'),
                               value: _dailyReviewEnabled,
                               onChanged: (val) async {
                                 final prefs = await SharedPreferences.getInstance();
@@ -899,7 +927,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
                             const Divider(height: 20),
 
-                            // 久未看提醒
                             SwitchListTile(
                               contentPadding: EdgeInsets.zero,
                               title: const Text(
@@ -944,7 +971,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
                             const Divider(height: 24),
 
-                            // 清單週末提醒
                             SwitchListTile(
                               contentPadding: EdgeInsets.zero,
                               title: const Text(
@@ -964,14 +990,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
                             const Divider(height: 24),
 
-                            // 連結健康檢查
                             SwitchListTile(
                               contentPadding: EdgeInsets.zero,
                               title: const Text(
                                 '連結健康檢查',
                                 style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
                               ),
-                              subtitle: const Text('定期檢查 YouTube 影片與網頁收藏，原作失效時自動標記 #失效連結 並通知你'),
+                              subtitle: const Text(
+                                '每週在 Wi-Fi 下檢查 YouTube、X、Spotify 與網頁收藏，原作失效時標記 #失效連結 並通知你',
+                              ),
                               value: _linkHealthCheckEnabled,
                               onChanged: (val) async {
                                 final prefs = await SharedPreferences.getInstance();
@@ -994,7 +1021,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                             ScaffoldMessenger.of(context).showSnackBar(
                                               SnackBar(
                                                 content: Text(
-                                                  '健康檢查完成！共掃描 ${res['checked']} 個連結，發現 ${res['broken']} 個失效連結。',
+                                                  '健康檢查完成！共掃描 ${res.checked} 個連結，發現 ${res.broken} 個失效連結。',
                                                 ),
                                               ),
                                             );
@@ -1028,7 +1055,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
                       const SizedBox(height: 20),
 
-                      // 5. 備份與匯入區塊
                       _buildSectionHeader('備份與匯入'),
                       _buildSettingsCard(
                         child: Column(
@@ -1120,7 +1146,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
                       const SizedBox(height: 20),
 
-                      // 6. 關於區塊
                       _buildSectionHeader('關於'),
                       _buildSettingsCard(
                         child: Column(

@@ -1,4 +1,5 @@
 ﻿import 'dart:math';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:drift/drift.dart' as drift;
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:http/http.dart' as http;
@@ -7,13 +8,30 @@ import 'package:timezone/data/latest_all.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
 import '../database/app_database.dart';
 
+class LinkHealthResult {
+  final int checked;
+  final int broken;
+  final bool skippedNoWifi;
+
+  const LinkHealthResult({
+    required this.checked,
+    required this.broken,
+    this.skippedNoWifi = false,
+  });
+}
+
 class ReminderService {
   static final FlutterLocalNotificationsPlugin _plugin =
       FlutterLocalNotificationsPlugin();
   static bool _initialized = false;
+  static void Function(String payload)? _onNotificationTap;
 
-  static Future<void> init() async {
+  static Future<void> init({void Function(String payload)? onTap}) async {
+    if (onTap != null) {
+      _onNotificationTap = onTap;
+    }
     if (_initialized) return;
+
     tz.initializeTimeZones();
     try {
       tz.setLocalLocation(tz.getLocation('Asia/Taipei'));
@@ -21,11 +39,28 @@ class ReminderService {
 
     const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
     const initSettings = InitializationSettings(android: androidInit);
-    await _plugin.initialize(initSettings);
+    await _plugin.initialize(
+      initSettings,
+      onDidReceiveNotificationResponse: (details) {
+        final payload = details.payload;
+        if (payload != null && payload.isNotEmpty) {
+          _onNotificationTap?.call(payload);
+        }
+      },
+    );
     _initialized = true;
   }
 
-  /// 瑼Ｘ?桀??臬撌脣?閮梢甈?
+  /// 檢查 App 是否由點擊通知冷啟動，若是則回傳對應 payload
+  static Future<String?> getLaunchPayload() async {
+    await init();
+    final details = await _plugin.getNotificationAppLaunchDetails();
+    if (details != null && details.didNotificationLaunchApp) {
+      return details.notificationResponse?.payload;
+    }
+    return null;
+  }
+
   static Future<bool> isPermissionGranted() async {
     await init();
     final androidImpl = _plugin.resolvePlatformSpecificImplementation<
@@ -34,7 +69,6 @@ class ReminderService {
     return await androidImpl.areNotificationsEnabled() ?? false;
   }
 
-  /// 隢? Android 13+ ?甈?
   static Future<bool> requestPermission() async {
     await init();
     final androidImpl = _plugin.resolvePlatformSpecificImplementation<
@@ -44,7 +78,7 @@ class ReminderService {
     return granted ?? false;
   }
 
-  /// ?寞???啗身摰?鞈?摨怠摰對??????璈??
+  /// 重新排程所有本機通知（未來 14 天不重複每日回顧 + 久未看 + 週末提醒）
   static Future<void> rescheduleAll(AppDatabase db) async {
     await init();
     await _plugin.cancelAll();
@@ -67,56 +101,63 @@ class ReminderService {
         .get();
     final unreadItems = allItems.where((i) => !i.isRead).toList();
 
-    // 1. 瘥?“?? (ID: 101)
+    // 1. 每日回顧：預排未來 14 天獨立推播 (ID: 201~214)，每天抽不同待讀項目
     if (dailyEnabled) {
-      String body = '???冽?摮??“雿??蝎曉蔗?批捆?改?';
-      if (unreadItems.isNotEmpty) {
-        final shuffled = List.of(unreadItems)..shuffle(Random());
-        final picks = shuffled.take(min(3, shuffled.length)).map((e) => '??${e.title}').join('\n');
-        body = '?箔?? ${min(3, shuffled.length)} ??霈?嗉?嚗n$picks';
-      }
+      final baseTime = _nextTimeOfDay(dailyHour, dailyMinute);
+      final random = Random();
 
-      await _plugin.zonedSchedule(
-        101,
-        '?冽?摮?繚 瘥?“',
-        body,
-        _nextTimeOfDay(dailyHour, dailyMinute),
-        const NotificationDetails(
-          android: AndroidNotificationDetails(
-            'daily_review_channel',
-            '瘥?“??',
-            channelDescription: '瘥予摰?? 1-3 ???嗉????“',
-            importance: Importance.defaultImportance,
-            priority: Priority.defaultPriority,
-            styleInformation: BigTextStyleInformation(''),
+      for (int dayOffset = 0; dayOffset < 14; dayOffset++) {
+        String body = '打開隨手存，花 1 分鐘回顧你的待讀靈感吧！';
+        if (unreadItems.isNotEmpty) {
+          final shuffled = List.of(unreadItems)..shuffle(random);
+          final pickCount = min(3, shuffled.length);
+          final picks =
+              shuffled.take(pickCount).map((e) => '• ${e.title}').join('\n');
+          body = '為你挑選 $pickCount 則待讀收藏：\n$picks';
+        }
+
+        await _plugin.zonedSchedule(
+          201 + dayOffset,
+          '隨手存 · 每日回顧',
+          body,
+          baseTime.add(Duration(days: dayOffset)),
+          const NotificationDetails(
+            android: AndroidNotificationDetails(
+              'daily_review_channel',
+              '每日回顧提醒',
+              channelDescription: '每天定時挑選 1-3 則舊收藏提醒回顧',
+              importance: Importance.defaultImportance,
+              priority: Priority.defaultPriority,
+              styleInformation: BigTextStyleInformation(''),
+            ),
           ),
-        ),
-        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-        uiLocalNotificationDateInterpretation:
-            UILocalNotificationDateInterpretation.absoluteTime,
-        matchDateTimeComponents: DateTimeComponents.time,
-      );
+          androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+          uiLocalNotificationDateInterpretation:
+              UILocalNotificationDateInterpretation.absoluteTime,
+          payload: 'daily_review',
+        );
+      }
     }
 
-    // 2. 銋????瘥望 20:00 蝯梯?頞? N 憭拇霈? (ID: 102)
+    // 2. 久未看提醒：每週日 20:00 統計超過 N 天未讀項目 (ID: 102)
     if (staleEnabled) {
       final cutoff = DateTime.now().subtract(Duration(days: staleDays));
       final staleCount =
           unreadItems.where((i) => i.createdAt.isBefore(cutoff)).length;
       final body = staleCount > 0
-          ? '?桀???$staleCount ?????$staleDays 憭拚?瘝?嚗蝛箸??∠?皜?銝銝嚗?
-          : '憭芣?鈭??桀?瘝?頞? $staleDays 憭拇??蝛??嗉???;
+          ? '目前有 $staleCount 則收藏超過 $staleDays 天還沒看，抽空滑卡片清理一下吧！'
+          : '太棒了！目前沒有超過 $staleDays 天未看的積壓收藏。';
 
       await _plugin.zonedSchedule(
         102,
-        '?冽?摮?繚 銋????,
+        '隨手存 · 久未看提醒',
         body,
         _nextWeekdayTime(DateTime.sunday, 20, 0),
         const NotificationDetails(
           android: AndroidNotificationDetails(
             'stale_reminder_channel',
-            '銋????,
-            channelDescription: '瘥梁絞閮???摰予?豢???嗉?',
+            '久未看提醒',
+            channelDescription: '每週統計超過指定天數未看的收藏',
             importance: Importance.defaultImportance,
             priority: Priority.defaultPriority,
           ),
@@ -125,26 +166,27 @@ class ReminderService {
         uiLocalNotificationDateInterpretation:
             UILocalNotificationDateInterpretation.absoluteTime,
         matchDateTimeComponents: DateTimeComponents.dayOfWeekAndTime,
+        payload: 'stale_review',
       );
     }
 
-    // 3. 皜?望??嚗??曹? 19:00 ?? (ID: 103)
+    // 3. 清單週末提醒：每週五 19:00 提醒 (ID: 103)
     if (weekendEnabled) {
       final count = unreadItems.length;
       final body = count > 0
-          ? '?望?唬?嚗??株ㄐ?? $count ?霈?嗉?嚗?餌?摨????嚗?頞望靘??嚗?
-          : '?望?翰嚗?????渡??梁??圈????;
+          ? '週末到了！清單裡還有 $count 則未讀收藏（想去的店、想看的文章），趁週末來看看吧！'
+          : '週末愉快！打開隨手存整理這週的新靈感吧。';
 
       await _plugin.zonedSchedule(
         103,
-        '?冽?摮?繚 ?望皜??',
+        '隨手存 · 週末清單提醒',
         body,
         _nextWeekdayTime(DateTime.friday, 19, 0),
         const NotificationDetails(
           android: AndroidNotificationDetails(
             'weekend_reminder_channel',
-            '皜?望??',
-            channelDescription: '瘥曹? 19:00 ???亦??望皜',
+            '清單週末提醒',
+            channelDescription: '每週五 19:00 提醒查看週末清單',
             importance: Importance.defaultImportance,
             priority: Priority.defaultPriority,
           ),
@@ -153,45 +195,62 @@ class ReminderService {
         uiLocalNotificationDateInterpretation:
             UILocalNotificationDateInterpretation.absoluteTime,
         matchDateTimeComponents: DateTimeComponents.dayOfWeekAndTime,
+        payload: 'weekend_review',
       );
     }
   }
 
-  /// 蝡?潮????亙?憿扳葫閰阡
+  /// 立即發送一則每日回顧測試通知（點擊可直接測試跳轉複習模式）
   static Future<void> sendInstantReviewPreview(AppDatabase db) async {
     await init();
     final allItems = await (db.select(db.savedItems)
           ..where((t) => t.isDeleted.equals(false) & t.isRead.equals(false)))
         .get();
 
-    String body = '?桀?瘝??芾??嗉?嚗翰?餅憓嗾蝑????嚗?;
+    String body = '目前沒有未讀收藏，快去新增幾筆連結或截圖吧！';
     if (allItems.isNotEmpty) {
       final shuffled = List.of(allItems)..shuffle(Random());
-      final picks = shuffled
-          .take(min(3, shuffled.length))
-          .map((e) => '??${e.title}')
-          .join('\n');
-      body = '?箔?? ${min(3, shuffled.length)} ??霈?嗉?嚗n$picks';
+      final pickCount = min(3, shuffled.length);
+      final picks =
+          shuffled.take(pickCount).map((e) => '• ${e.title}').join('\n');
+      body = '為你挑選 $pickCount 則待讀收藏：\n$picks';
     }
 
     await _plugin.show(
       999,
-      '?冽?摮?繚 瘥?“嚗??喲?閬踝?',
+      '隨手存 · 每日回顧（點擊進入複習）',
       body,
       const NotificationDetails(
         android: AndroidNotificationDetails(
           'daily_review_channel',
-          '瘥?“??',
+          '每日回顧提醒',
           importance: Importance.high,
           priority: Priority.high,
           styleInformation: BigTextStyleInformation(''),
         ),
       ),
+      payload: 'daily_review',
     );
   }
 
-  /// ????????臬憭望?嚗?04 / 410嚗?銝西??閮?#憭望????
-  static Future<Map<String, int>> runLinkHealthCheck(AppDatabase db) async {
+  /// 掃描連結健康度（支援 YouTube / Spotify / X oEmbed 與一般網頁；自動執行時可限定 Wi-Fi）
+  static Future<LinkHealthResult> runLinkHealthCheck(
+    AppDatabase db, {
+    bool requireWifi = false,
+  }) async {
+    if (requireWifi) {
+      try {
+        final results = await Connectivity().checkConnectivity();
+        if (!results.contains(ConnectivityResult.wifi)) {
+          return const LinkHealthResult(
+            checked: 0,
+            broken: 0,
+            skippedNoWifi: true,
+          );
+        }
+      } catch (_) {}
+    }
+
     final linkItems = await (db.select(db.savedItems)
           ..where((t) => t.isDeleted.equals(false) & t.itemType.equals('link')))
         .get();
@@ -209,12 +268,34 @@ class ReminderService {
       bool isDead = false;
 
       try {
-        // ?? YouTube 敶梁?雿輻 oEmbed 瑼Ｘ?臬撌脰◤銝?身?箇?鈭?
-        if (rawUrl.contains('youtube.com/watch') || rawUrl.contains('youtu.be/')) {
+        if (rawUrl.contains('youtube.com/watch') ||
+            rawUrl.contains('youtu.be/') ||
+            rawUrl.contains('youtube.com/shorts/')) {
           final oembed = Uri.parse(
               'https://www.youtube.com/oembed?url=${Uri.encodeComponent(rawUrl)}&format=json');
-          final resp = await http.get(oembed).timeout(const Duration(seconds: 6));
-          if (resp.statusCode == 404 || resp.statusCode == 401 || resp.statusCode == 403) {
+          final resp =
+              await http.get(oembed).timeout(const Duration(seconds: 6));
+          if (resp.statusCode == 404 ||
+              resp.statusCode == 401 ||
+              resp.statusCode == 403) {
+            isDead = true;
+          }
+        } else if (rawUrl.contains('open.spotify.com/')) {
+          final oembed = Uri.parse(
+              'https://open.spotify.com/oembed?url=${Uri.encodeComponent(rawUrl)}');
+          final resp =
+              await http.get(oembed).timeout(const Duration(seconds: 6));
+          if (resp.statusCode == 404 || resp.statusCode == 410) {
+            isDead = true;
+          }
+        } else if ((rawUrl.contains('x.com/') ||
+                rawUrl.contains('twitter.com/')) &&
+            rawUrl.contains('/status/')) {
+          final oembed = Uri.parse(
+              'https://publish.twitter.com/oembed?url=${Uri.encodeComponent(rawUrl)}');
+          final resp =
+              await http.get(oembed).timeout(const Duration(seconds: 6));
+          if (resp.statusCode == 404 || resp.statusCode == 403) {
             isDead = true;
           }
         } else {
@@ -226,15 +307,15 @@ class ReminderService {
           }
         }
       } catch (_) {
-        // ?暹???祈銝炊?斤憭望?
+        // 逾時或防爬蟲不誤判為失效
       }
 
       if (isDead) {
         broken++;
         final currentTags = item.tags ?? '';
-        if (!currentTags.contains('憭望????')) {
+        if (!currentTags.contains('失效連結')) {
           final updatedTags =
-              currentTags.isEmpty ? '憭望????' : '$currentTags, 憭望????';
+              currentTags.isEmpty ? '失效連結' : '$currentTags, 失效連結';
           await (db.update(db.savedItems)..where((t) => t.id.equals(item.id)))
               .write(
             SavedItemsCompanion(
@@ -249,20 +330,21 @@ class ReminderService {
     if (broken > 0 && await isPermissionGranted()) {
       await _plugin.show(
         104,
-        '?冽?摮?繚 ????亙熒瑼Ｘ蝯?',
-        '?望炎??$checked ???嚗??$broken ??雿??撌脣仃??撌脰??閮?#憭望????嚗?,
+        '隨手存 · 連結健康檢查結果',
+        '共檢查 $checked 個連結，發現 $broken 個原作連結已失效（點擊立即檢視 #失效連結）。',
         const NotificationDetails(
           android: AndroidNotificationDetails(
             'link_health_channel',
-            '????亙熒瑼Ｘ',
+            '連結健康檢查',
             importance: Importance.high,
             priority: Priority.high,
           ),
         ),
+        payload: 'link_health',
       );
     }
 
-    return {'checked': checked, 'broken': broken};
+    return LinkHealthResult(checked: checked, broken: broken);
   }
 
   static tz.TZDateTime _nextTimeOfDay(int hour, int minute) {
@@ -283,4 +365,3 @@ class ReminderService {
     return scheduled;
   }
 }
-
