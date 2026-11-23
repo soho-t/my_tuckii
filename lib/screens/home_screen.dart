@@ -47,7 +47,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   String? _updateStatusText;
 
   // 動態版本號與網頁 OG 封面圖快取
-  String _appVersion = '1.8.0';
+  String _appVersion = '1.9.0';
   Map<String, String> _linkCoverCache = {};
 
   // 外觀與收錄設定
@@ -2017,6 +2017,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                 label: const Text('綁定 Google 帳號'),
                               ),
                             ],
+                            const Divider(height: 24),
+                            ListTile(
+                              contentPadding: EdgeInsets.zero,
+                              leading: const Icon(Icons.computer, color: Color(0xFF7A5C3E)),
+                              title: const Text(
+                                '電腦網頁伴侶版',
+                                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                              ),
+                              subtitle: const Text('免安裝，在電腦瀏覽器登入同一個 Google 帳號同步管理'),
+                              trailing: const Icon(Icons.chevron_right),
+                              onTap: () {
+                                Navigator.pop(ctx);
+                                _showWebCompanionGuideSheet();
+                              },
+                            ),
                           ],
                         ),
                       ),
@@ -2837,6 +2852,114 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         border: Border.all(color: const Color(0xFFE6DEC8)),
       ),
       child: child,
+    );
+  }
+
+  void _showWebCompanionGuideSheet() {
+    const webUrl = 'https://soho-t.github.io/my_tuckii/';
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFFFAF7F2),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Row(
+                  children: [
+                    Icon(Icons.computer, color: Color(0xFF8C6239)),
+                    SizedBox(width: 8),
+                    Text(
+                      '電腦網頁伴侶版使用指南',
+                      style: TextStyle(fontSize: 19, fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => Navigator.pop(ctx),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: const Color(0xFFE6DEC8)),
+              ),
+              child: const Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('1. 手機端先開啟雲端同步', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                  Text('在設定頁「帳號」綁定 Google 帳號並點一次「立即同步」，將收藏上傳至個人 Google Drive 專屬空間。', style: TextStyle(fontSize: 13, color: Colors.black87)),
+                  SizedBox(height: 10),
+                  Text('2. 電腦瀏覽器開啟網頁版', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                  Text('點擊下方「複製網址」傳到電腦（例如透過 LINE 傳給自己），使用 Chrome 或 Edge 開啟。', style: TextStyle(fontSize: 13, color: Colors.black87)),
+                  SizedBox(height: 10),
+                  Text('3. 登入同一個 Google 帳號', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                  Text('在網頁版登入與手機相同的 Google 帳號，系統會自動讀取同一份加密同步資料，彼此資料完全獨立。', style: TextStyle(fontSize: 13, color: Colors.black87)),
+                  SizedBox(height: 10),
+                  Text('4. 電腦存、手機看；手機存、電腦查', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                  Text('在電腦新增或編輯後會自動存回雲端；回手機點右上角雲端圖示即可更新。', style: TextStyle(fontSize: 13, color: Colors.black87)),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFEFE9DC),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const SelectableText(
+                webUrl,
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF5A4328)),
+              ),
+            ),
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () async {
+                      await Clipboard.setData(const ClipboardData(text: webUrl));
+                      if (ctx.mounted) Navigator.pop(ctx);
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('已複製電腦網頁版網址')),
+                        );
+                      }
+                    },
+                    icon: const Icon(Icons.copy, size: 18),
+                    label: const Text('複製網址'),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      _openExternalUrl(webUrl);
+                    },
+                    icon: const Icon(Icons.open_in_new, size: 18),
+                    label: const Text('直接開啟網頁'),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
     );
   }
 
