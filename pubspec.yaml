@@ -1,7 +1,7 @@
 name: my_tuckii
 description: 隨手存 MyTuckii - 你的個人離線優先跨裝置收藏庫
 publish_to: 'none'
-version: 1.6.1+9
+version: 1.6.2+10
 
 
 environment:

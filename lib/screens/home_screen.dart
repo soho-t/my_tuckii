@@ -43,9 +43,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _isSyncing = false;
   bool _isHandlingQuickSave = false;
   bool _isCheckingUpdate = false;
+  String? _updateStatusText;
 
   // 動態版本號與網頁 OG 封面圖快取
-  String _appVersion = '1.6.1';
+  String _appVersion = '1.6.2';
   Map<String, String> _linkCoverCache = {};
 
   // 外觀與收錄設定
@@ -134,6 +135,45 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (_detectClipboardOnOpen && !_isHandlingQuickSave) {
         _checkClipboardForNewLink();
       }
+    }
+  }
+
+  /// 安全開啟外部網址（失敗時自動嘗試預設模式，仍失敗則複製網址並跳出提示）
+  Future<void> _openExternalUrl(String rawUrl) async {
+    final uri = Uri.tryParse(rawUrl.trim());
+    if (uri == null) return;
+
+    bool launched = false;
+    try {
+      launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } catch (_) {
+      launched = false;
+    }
+
+    if (!launched) {
+      try {
+        launched = await launchUrl(uri, mode: LaunchMode.platformDefault);
+      } catch (_) {
+        launched = false;
+      }
+    }
+
+    if (!launched && mounted) {
+      await Clipboard.setData(ClipboardData(text: rawUrl));
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('無法自動開啟瀏覽器'),
+          content: Text('已將網址複製到剪貼簿，請直接貼到瀏覽器開啟：\n\n$rawUrl'),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('確定'),
+            ),
+          ],
+        ),
+      );
     }
   }
 
@@ -342,10 +382,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           FilledButton.icon(
             onPressed: () async {
               Navigator.pop(ctx);
-              final uri = Uri.tryParse(info.downloadUrl);
-              if (uri != null) {
-                await launchUrl(uri, mode: LaunchMode.externalApplication);
-              }
+              await _openExternalUrl(info.downloadUrl);
             },
             icon: const Icon(Icons.download_rounded, size: 18),
             label: const Text('下載新版 APK'),
@@ -381,10 +418,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ),
             const SizedBox(height: 6),
             TextButton.icon(
-              onPressed: () => launchUrl(
-                Uri.parse('https://aistudio.google.com/apikey'),
-                mode: LaunchMode.externalApplication,
-              ),
+              onPressed: () => _openExternalUrl('https://aistudio.google.com/apikey'),
               icon: const Icon(Icons.open_in_new, size: 16),
               label: const Text('前往 Google AI Studio 免費申請金鑰', style: TextStyle(fontSize: 12)),
             ),
@@ -1191,20 +1225,38 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                             },
                                           );
                                           if (mounted) {
-                                            ScaffoldMessenger.of(context).showSnackBar(
-                                              SnackBar(
+                                            showDialog(
+                                              context: context,
+                                              builder: (dCtx) => AlertDialog(
+                                                title: const Text('AI 整理完成'),
                                                 content: Text(
                                                   done > 0
-                                                      ? 'AI 整理完成！已為 $done 筆收藏補上標籤與分類。'
+                                                      ? '已為 $done 筆收藏補上標籤與分類。'
                                                       : '目前沒有需要整理的無標籤收藏。',
                                                 ),
+                                                actions: [
+                                                  FilledButton(
+                                                    onPressed: () => Navigator.pop(dCtx),
+                                                    child: const Text('確定'),
+                                                  ),
+                                                ],
                                               ),
                                             );
                                           }
                                         } catch (e) {
                                           if (mounted) {
-                                            ScaffoldMessenger.of(context).showSnackBar(
-                                              SnackBar(content: Text('AI 整理失敗：$e')),
+                                            showDialog(
+                                              context: context,
+                                              builder: (dCtx) => AlertDialog(
+                                                title: const Text('AI 整理失敗'),
+                                                content: Text('$e'),
+                                                actions: [
+                                                  FilledButton(
+                                                    onPressed: () => Navigator.pop(dCtx),
+                                                    child: const Text('確定'),
+                                                  ),
+                                                ],
+                                              ),
                                             );
                                           }
                                         } finally {
@@ -1544,11 +1596,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                             },
                                           );
                                           if (mounted) {
-                                            ScaffoldMessenger.of(context).showSnackBar(
-                                              SnackBar(
+                                            showDialog(
+                                              context: context,
+                                              builder: (dCtx) => AlertDialog(
+                                                title: const Text('連結健康檢查完成'),
                                                 content: Text(
-                                                  '健康檢查完成！共掃描 ${res.checked} 個連結，新發現 ${res.broken} 個失效連結。',
+                                                  '共掃描 ${res.checked} 個連結，新發現 ${res.broken} 個失效連結。',
                                                 ),
+                                                actions: [
+                                                  FilledButton(
+                                                    onPressed: () => Navigator.pop(dCtx),
+                                                    child: const Text('確定'),
+                                                  ),
+                                                ],
                                               ),
                                             );
                                           }
@@ -1706,29 +1766,70 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                 '檢查更新',
                                 style: TextStyle(fontWeight: FontWeight.bold),
                               ),
-                              subtitle: const Text('檢查 GitHub Releases 是否有新版 APK'),
+                              subtitle: Text(
+                                _isCheckingUpdate
+                                    ? '正在連線 GitHub 檢查最新版本...'
+                                    : (_updateStatusText ?? '檢查 GitHub Releases 是否有新版 APK'),
+                              ),
                               trailing: const Icon(Icons.chevron_right),
                               onTap: _isCheckingUpdate
                                   ? null
                                   : () async {
-                                      setSheetState(() => _isCheckingUpdate = true);
+                                      setSheetState(() {
+                                        _isCheckingUpdate = true;
+                                        _updateStatusText = null;
+                                      });
                                       try {
                                         final info = await UpdateService.checkForUpdate(isManual: true);
                                         if (!mounted) return;
                                         if (info != null && info.hasUpdate) {
+                                          setSheetState(() {
+                                            _updateStatusText = '發現新版本 v${info.latestVersion}';
+                                          });
                                           if (ctx.mounted) Navigator.pop(ctx);
                                           await _showUpdateDialog(info);
                                         } else {
-                                          ScaffoldMessenger.of(context).showSnackBar(
-                                            SnackBar(
-                                              content: Text('目前已是最新版本 (v${info?.currentVersion ?? _appVersion})'),
+                                          final cur = info?.currentVersion ?? _appVersion;
+                                          setSheetState(() {
+                                            _updateStatusText = '目前已是最新版本 (v$cur)';
+                                          });
+                                          showDialog(
+                                            context: context,
+                                            builder: (dCtx) => AlertDialog(
+                                              title: const Text('已是最新版本'),
+                                              content: Text('你目前安裝的 v$cur 已經是最新發布版本。'),
+                                              actions: [
+                                                FilledButton(
+                                                  onPressed: () => Navigator.pop(dCtx),
+                                                  child: const Text('確定'),
+                                                ),
+                                              ],
                                             ),
                                           );
                                         }
                                       } catch (e) {
+                                        final errText = e.toString();
+                                        final hint = errText.contains('404')
+                                            ? '\n\n提示：若 GitHub 倉庫設為「私有 (Private)」，App 無法直接讀取 Releases，需先將倉庫改為公開。'
+                                            : '';
+                                        if (ctx.mounted) {
+                                          setSheetState(() {
+                                            _updateStatusText = '檢查失敗，請點擊重試';
+                                          });
+                                        }
                                         if (mounted) {
-                                          ScaffoldMessenger.of(context).showSnackBar(
-                                            SnackBar(content: Text('檢查更新失敗：$e')),
+                                          showDialog(
+                                            context: context,
+                                            builder: (dCtx) => AlertDialog(
+                                              title: const Text('檢查更新失敗'),
+                                              content: Text('$errText$hint'),
+                                              actions: [
+                                                FilledButton(
+                                                  onPressed: () => Navigator.pop(dCtx),
+                                                  child: const Text('確定'),
+                                                ),
+                                              ],
+                                            ),
                                           );
                                         }
                                       } finally {
@@ -1755,10 +1856,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               contentPadding: EdgeInsets.zero,
                               title: const Text('隱私權政策與專案首頁'),
                               trailing: const Icon(Icons.open_in_new, size: 18),
-                              onTap: () => launchUrl(
-                                Uri.parse('https://github.com/soho-t/my_tuckii'),
-                                mode: LaunchMode.externalApplication,
-                              ),
+                              onTap: () => _openExternalUrl('https://github.com/soho-t/my_tuckii'),
                             ),
                           ],
                         ),
@@ -2300,10 +2398,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ),
       );
     } else if (item.url != null) {
-      final uri = Uri.tryParse(item.url!);
-      if (uri != null) {
-        await launchUrl(uri, mode: LaunchMode.externalApplication);
-      }
+      await _openExternalUrl(item.url!);
     }
   }
 
@@ -2393,8 +2488,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         ? null
                         : () async {
                             if (_geminiApiKey.isEmpty) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text('請先至右上角「設定 → AI 智慧整理」填入 Gemini API Key')),
+                              showDialog(
+                                context: context,
+                                builder: (dCtx) => AlertDialog(
+                                  title: const Text('尚未設定 API Key'),
+                                  content: const Text('請先至右上角「設定 → AI 智慧整理」填入 Gemini API Key。'),
+                                  actions: [
+                                    FilledButton(
+                                      onPressed: () => Navigator.pop(dCtx),
+                                      child: const Text('確定'),
+                                    ),
+                                  ],
+                                ),
                               );
                               return;
                             }
@@ -2423,8 +2528,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               }
                             } catch (e) {
                               if (mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text('AI 產生失敗：$e')),
+                                showDialog(
+                                  context: context,
+                                  builder: (dCtx) => AlertDialog(
+                                    title: const Text('AI 產生失敗'),
+                                    content: Text('$e'),
+                                    actions: [
+                                      FilledButton(
+                                        onPressed: () => Navigator.pop(dCtx),
+                                        child: const Text('確定'),
+                                      ),
+                                    ],
+                                  ),
                                 );
                               }
                             } finally {
