@@ -46,7 +46,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   String? _updateStatusText;
 
   // 動態版本號與網頁 OG 封面圖快取
-  String _appVersion = '1.6.3';
+  String _appVersion = '1.7.0';
   Map<String, String> _linkCoverCache = {};
 
   // 外觀與收錄設定
@@ -414,6 +414,267 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  /// 自然語言智慧搜尋面板（AI 找收藏）
+  void _showAiSearchSheet() {
+    if (_geminiApiKey.isEmpty) {
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('尚未設定 Gemini API Key'),
+          content: const Text('請先至右上角「設定 → ✨ AI 智慧整理」填入個人免費金鑰，即可使用口語智慧搜尋。'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+            FilledButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                _showSettingsBottomSheet();
+              },
+              child: const Text('前往設定'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
+    final queryCtrl = TextEditingController(text: _searchController.text.trim());
+    bool isSearching = false;
+    AiSearchResult? searchResult;
+    String? errorMsg;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFFFAF7F2),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) {
+          Future<void> runSearch() async {
+            final q = queryCtrl.text.trim();
+            if (q.isEmpty || isSearching) return;
+            FocusScope.of(ctx).unfocus();
+            setSheetState(() {
+              isSearching = true;
+              errorMsg = null;
+            });
+            try {
+              final res = await AiOrganizerService.naturalLanguageSearch(widget.db, q);
+              if (ctx.mounted) {
+                setSheetState(() => searchResult = res);
+              }
+            } catch (e) {
+              if (ctx.mounted) {
+                setSheetState(() => errorMsg = '$e');
+              }
+            } finally {
+              if (ctx.mounted) {
+                setSheetState(() => isSearching = false);
+              }
+            }
+          }
+
+          return DraggableScrollableSheet(
+            expand: false,
+            initialChildSize: 0.78,
+            minChildSize: 0.5,
+            maxChildSize: 0.94,
+            builder: (_, scrollController) => Padding(
+              padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+              child: Column(
+                children: [
+                  const SizedBox(height: 10),
+                  Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.brown.withOpacity(0.25),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 12, 12, 8),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Row(
+                          children: [
+                            Icon(Icons.auto_awesome, color: Color(0xFF8C6239)),
+                            SizedBox(width: 8),
+                            Text(
+                              'AI 智慧搜尋',
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFF2C2520),
+                              ),
+                            ),
+                          ],
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close),
+                          onPressed: () => Navigator.pop(ctx),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: queryCtrl,
+                            textInputAction: TextInputAction.search,
+                            onSubmitted: (_) => runSearch(),
+                            decoration: InputDecoration(
+                              hintText: '用口語問我，例如：之前存的美食或報表...',
+                              filled: true,
+                              fillColor: Colors.white,
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 14,
+                                vertical: 12,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        FilledButton(
+                          onPressed: isSearching ? null : runSearch,
+                          style: FilledButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                          ),
+                          child: isSearching
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : const Text('搜尋'),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Expanded(
+                    child: ListView(
+                      controller: scrollController,
+                      padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+                      children: [
+                        if (errorMsg != null)
+                          Container(
+                            padding: const EdgeInsets.all(14),
+                            decoration: BoxDecoration(
+                              color: Colors.red.shade50,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.red.shade200),
+                            ),
+                            child: Text(
+                              '搜尋失敗：$errorMsg',
+                              style: TextStyle(color: Colors.red.shade900),
+                            ),
+                          ),
+                        if (searchResult != null) ...[
+                          Container(
+                            padding: const EdgeInsets.all(14),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(color: const Color(0xFFE6DEC8)),
+                            ),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Icon(Icons.tips_and_updates_outlined,
+                                    color: Color(0xFF8C6239), size: 20),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Text(
+                                    searchResult!.answer,
+                                    style: const TextStyle(fontSize: 14, height: 1.45),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 14),
+                          if (searchResult!.matchedItems.isNotEmpty) ...[
+                            Text(
+                              '找到 ${searchResult!.matchedItems.length} 筆相關收藏：',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFF7A5C3E),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            ...searchResult!.matchedItems.map((item) => Card(
+                                  margin: const EdgeInsets.only(bottom: 8),
+                                  child: ListTile(
+                                    leading: Icon(
+                                      item.itemType == 'image'
+                                          ? Icons.screenshot
+                                          : (item.itemType == 'file'
+                                              ? Icons.description_outlined
+                                              : (item.itemType == 'note'
+                                                  ? Icons.sticky_note_2_outlined
+                                                  : Icons.link)),
+                                      color: const Color(0xFF7A5C3E),
+                                    ),
+                                    title: Text(
+                                      item.title,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(fontWeight: FontWeight.w600),
+                                    ),
+                                    subtitle: Text(
+                                      item.tags?.isNotEmpty == true
+                                          ? '#${item.tags}'
+                                          : (item.note?.isNotEmpty == true
+                                              ? item.note!
+                                              : (item.url ?? '')),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    trailing: const Icon(Icons.chevron_right),
+                                    onTap: () {
+                                      Navigator.pop(ctx);
+                                      _openItemDetail(item);
+                                    },
+                                  ),
+                                )),
+                          ],
+                        ] else if (!isSearching && errorMsg == null) ...[
+                          Padding(
+                            padding: const EdgeInsets.only(top: 24),
+                            child: Text(
+                              '試著輸入你想找的主題、時間或截圖裡的關鍵字，Gemini 會幫你從最近的 150 筆收藏中精準篩選。',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   Future<void> _showGeminiApiKeyDialog(StateSetter setSheetState) async {
     final keyCtrl = TextEditingController(text: _geminiApiKey);
     final saved = await showDialog<bool>(
@@ -425,7 +686,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              '金鑰僅儲存在這支手機本機，用於呼叫 Gemini 2.5 Flash 自動產生標籤與歸類。',
+              '金鑰僅儲存在這支手機本機，用於呼叫 Gemini 2.5 Flash 進行截圖識圖、重點摘要、自動標籤與口語搜尋。',
               style: TextStyle(fontSize: 13),
             ),
             const SizedBox(height: 12),
@@ -440,7 +701,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ),
             const SizedBox(height: 6),
             TextButton.icon(
-              onPressed: () => _openExternalUrl('https://aistudio.google.com/apikey'),
+              onPressed: () => _openExternalUrl('[https://aistudio.google.com/apikey](https://aistudio.google.com/apikey)'),
               icon: const Icon(Icons.open_in_new, size: 16),
               label: const Text('前往 Google AI Studio 免費申請金鑰', style: TextStyle(fontSize: 12)),
             ),
@@ -837,6 +1098,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         setState(() => _searchQuery = '');
                       },
                     ),
+                  IconButton(
+                    icon: const Icon(Icons.auto_awesome, color: Color(0xFF8C6239)),
+                    tooltip: 'AI 口語智慧搜尋',
+                    onPressed: _showAiSearchSheet,
+                  ),
                 ],
                 elevation: WidgetStateProperty.all(0),
                 backgroundColor: WidgetStateProperty.all(
@@ -1253,7 +1519,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                 title: const Text('AI 整理完成'),
                                                 content: Text(
                                                   done > 0
-                                                      ? '已為 $done 筆收藏補上標籤與分類。'
+                                                      ? '已為 $done 筆收藏（含截圖識圖）補上標籤、摘要與分類。'
                                                       : '目前沒有需要整理的無標籤收藏。',
                                                 ),
                                                 actions: [
@@ -1299,7 +1565,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                       ? (_aiTotal > 0
                                           ? 'AI 整理中 ($_aiCurrent / $_aiTotal)...'
                                           : '準備呼叫 Gemini...')
-                                      : '一鍵整理所有無標籤收藏',
+                                      : '一鍵整理所有無標籤收藏（含截圖識圖）',
                                 ),
                               ),
                             ),
@@ -1878,7 +2144,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               contentPadding: EdgeInsets.zero,
                               title: const Text('隱私權政策與專案首頁'),
                               trailing: const Icon(Icons.open_in_new, size: 18),
-                              onTap: () => _openExternalUrl('https://github.com/soho-t/my_tuckii'),
+                              onTap: () => _openExternalUrl('[https://github.com/soho-t/my_tuckii](https://github.com/soho-t/my_tuckii)'),
                             ),
                           ],
                         ),
@@ -2432,6 +2698,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final allCollections = await widget.db.select(widget.db.collections).get();
     int? selectedColId = item.collectionId;
     bool isGeneratingAi = false;
+    bool isSummarizingAi = false;
 
     if (!mounted) return;
 
@@ -2439,7 +2706,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       context: context,
       isScrollControlled: true,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setModalState) => Padding(
+        builder: (ctx, setModalState) => SingleChildScrollView(
           padding: EdgeInsets.fromLTRB(20, 20, 20, MediaQuery.of(ctx).viewInsets.bottom + 20),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -2505,7 +2772,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   labelText: '標籤 (方便搜尋，如：合約, 報表)',
                   border: const OutlineInputBorder(),
                   suffixIcon: IconButton(
-                    tooltip: 'AI 自動產生標籤與歸類',
+                    tooltip: item.itemType == 'image' ? 'AI 識圖產生標籤與摘要' : 'AI 自動產生標籤與歸類',
                     onPressed: isGeneratingAi
                         ? null
                         : () async {
@@ -2531,12 +2798,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                 title: titleCtrl.text.trim(),
                                 url: item.url,
                                 note: noteCtrl.text.trim(),
+                                imagePath: item.itemType == 'image' ? item.localImagePath : null,
                                 existingCollections: allCollections.map((c) => c.name).toList(),
                               );
                               if (res != null && ctx.mounted) {
                                 setModalState(() {
                                   if (res.tags.isNotEmpty) {
                                     tagsCtrl.text = res.tags.join(', ');
+                                  }
+                                  if (res.suggestedTitle != null &&
+                                      item.itemType == 'image') {
+                                    titleCtrl.text = res.suggestedTitle!;
+                                  }
+                                  if (res.summary != null &&
+                                      noteCtrl.text.trim().isEmpty) {
+                                    noteCtrl.text = res.summary!;
                                   }
                                   if (selectedColId == null && res.suggestedCollection != null) {
                                     for (final col in allCollections) {
@@ -2581,10 +2857,76 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               const SizedBox(height: 12),
               TextField(
                 controller: noteCtrl,
-                maxLines: 3,
-                decoration: const InputDecoration(labelText: '備註或筆記內文', border: OutlineInputBorder()),
+                maxLines: 4,
+                decoration: const InputDecoration(labelText: '備註或重點摘要', border: OutlineInputBorder()),
               ),
-              const SizedBox(height: 16),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed: isSummarizingAi
+                      ? null
+                      : () async {
+                          if (_geminiApiKey.isEmpty) {
+                            showDialog(
+                              context: context,
+                              builder: (dCtx) => AlertDialog(
+                                title: const Text('尚未設定 API Key'),
+                                content: const Text('請先至右上角「設定 → AI 智慧整理」填入 Gemini API Key。'),
+                                actions: [
+                                  FilledButton(
+                                    onPressed: () => Navigator.pop(dCtx),
+                                    child: const Text('確定'),
+                                  ),
+                                ],
+                              ),
+                            );
+                            return;
+                          }
+                          setModalState(() => isSummarizingAi = true);
+                          try {
+                            final summary = await AiOrganizerService.summarizeItem(
+                              title: titleCtrl.text.trim(),
+                              url: item.url,
+                              note: noteCtrl.text.trim(),
+                              imagePath: item.itemType == 'image' ? item.localImagePath : null,
+                            );
+                            if (ctx.mounted) {
+                              setModalState(() => noteCtrl.text = summary);
+                            }
+                          } catch (e) {
+                            if (mounted) {
+                              showDialog(
+                                context: context,
+                                builder: (dCtx) => AlertDialog(
+                                  title: const Text('摘要產生失敗'),
+                                  content: Text('$e'),
+                                  actions: [
+                                    FilledButton(
+                                      onPressed: () => Navigator.pop(dCtx),
+                                      child: const Text('確定'),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            }
+                          } finally {
+                            if (ctx.mounted) setModalState(() => isSummarizingAi = false);
+                          }
+                        },
+                  icon: isSummarizingAi
+                      ? const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.summarize_outlined, size: 16),
+                  label: Text(
+                    isSummarizingAi ? '正在產生 3 點重點摘要...' : 'AI 產生 3 點重點摘要',
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
               FilledButton(
                 onPressed: () async {
                   await (widget.db.update(widget.db.savedItems)..where((t) => t.id.equals(item.id)))
