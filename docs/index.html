@@ -1,0 +1,838 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>隨手存 MyTuckii · 電腦網頁伴侶版</title>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <style>
+    :root {
+      --bg: #FAF7F2;
+      --card: #FFFFFF;
+      --border: #E6DEC8;
+      --primary: #8C6239;
+      --primary-dark: #5A4328;
+      --text: #2C2520;
+      --muted: #786B5E;
+      --danger: #C62828;
+      --chip-bg: #EFE9DC;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Microsoft JhengHei", "PingFang TC", system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      background: rgba(250, 247, 242, 0.95);
+      backdrop-filter: blur(8px);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--primary-dark);
+    }
+    .brand span.badge {
+      font-size: 12px;
+      background: var(--chip-bg);
+      color: var(--primary);
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-weight: 600;
+    }
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    button {
+      font-family: inherit;
+      cursor: pointer;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--card);
+      color: var(--text);
+      padding: 8px 14px;
+      font-size: 14px;
+      font-weight: 600;
+      transition: all 0.15s ease;
+    }
+    button:hover { border-color: var(--primary); }
+    button.primary {
+      background: var(--primary);
+      border-color: var(--primary);
+      color: #fff;
+    }
+    button.primary:hover { background: var(--primary-dark); }
+    button.danger {
+      color: var(--danger);
+      border-color: #F2B8B5;
+      background: #FFF5F5;
+    }
+    button:disabled { opacity: 0.55; cursor: not-allowed; }
+    main {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 24px 20px 64px;
+    }
+    .panel {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 24px;
+      margin-bottom: 20px;
+    }
+    .setup-box {
+      max-width: 560px;
+      margin: 40px auto;
+    }
+    .setup-box h2 { margin-top: 0; color: var(--primary-dark); }
+    input[type="text"], input[type="url"], textarea, select {
+      width: 100%;
+      font-family: inherit;
+      font-size: 14px;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: #fff;
+      color: var(--text);
+      outline: none;
+    }
+    input:focus, textarea:focus, select:focus {
+      border-color: var(--primary);
+    }
+    .toolbar {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 14px;
+      flex-wrap: wrap;
+    }
+    .toolbar input { flex: 1; min-width: 240px; }
+    .chips {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 14px;
+    }
+    .chip {
+      padding: 6px 12px;
+      border-radius: 999px;
+      background: var(--chip-bg);
+      color: var(--primary-dark);
+      font-size: 13px;
+      border: 1px solid transparent;
+      cursor: pointer;
+    }
+    .chip.active {
+      background: var(--primary);
+      color: #fff;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 14px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 10px;
+      transition: transform 0.12s ease, box-shadow 0.12s ease;
+    }
+    .card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 18px rgba(90, 67, 40, 0.08);
+    }
+    .card-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .card-title {
+      font-size: 15px;
+      font-weight: 700;
+      margin: 4px 0;
+      word-break: break-word;
+    }
+    .card-title a {
+      color: var(--text);
+      text-decoration: none;
+    }
+    .card-title a:hover { color: var(--primary); text-decoration: underline; }
+    .card-note {
+      font-size: 13px;
+      color: var(--muted);
+      white-space: pre-wrap;
+      word-break: break-word;
+      display: -webkit-box;
+      -webkit-line-clamp: 4;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .card-tags {
+      font-size: 12px;
+      color: var(--primary);
+      font-weight: 600;
+    }
+    .card-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 6px;
+      border-top: 1px solid #F2ECE0;
+      padding-top: 8px;
+    }
+    .card-actions button {
+      padding: 4px 10px;
+      font-size: 12px;
+    }
+    .status-bar {
+      font-size: 13px;
+      color: var(--muted);
+      margin-bottom: 12px;
+      display: flex;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .hidden { display: none !important; }
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(44, 37, 32, 0.45);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 50;
+      padding: 16px;
+    }
+    .modal {
+      background: var(--card);
+      border-radius: 18px;
+      width: 100%;
+      max-width: 520px;
+      padding: 22px;
+      box-shadow: 0 12px 36px rgba(0, 0, 0, 0.2);
+    }
+    .modal h3 { margin-top: 0; color: var(--primary-dark); }
+    .form-group { margin-bottom: 12px; }
+    .form-group label {
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 4px;
+      color: var(--primary-dark);
+    }
+    .modal-footer {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 16px;
+    }
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--primary-dark);
+      color: #fff;
+      padding: 10px 18px;
+      border-radius: 999px;
+      font-size: 14px;
+      z-index: 100;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.2);
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      🗂️ 隨手存 MyTuckii <span class="badge">Web 伴侶版 v1.9.0</span>
+    </div>
+    <div class="header-actions" id="headerActions">
+      <button id="btnAdd" class="primary hidden" onclick="openEditor()">＋ 新增收藏</button>
+      <button id="btnSync" class="hidden" onclick="syncFromDrive()">🔄 重新同步</button>
+      <button id="btnInspect" class="hidden" onclick="inspectRawFile()">🔍 檢視同步檔</button>
+      <button id="btnSignOut" class="hidden" onclick="signOut()">登出</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- 登入與憑證設定畫面 -->
+    <section id="authSection" class="panel setup-box">
+      <h2>連線你的 Google Drive 收藏庫</h2>
+      <p style="color: var(--muted); font-size: 14px;">
+        網頁版直接在瀏覽器端連線你的個人 Google Drive 隱藏資料夾（<code>appDataFolder</code>），不經過任何第三方伺服器。
+      </p>
+      <div class="form-group">
+        <label for="clientIdInput">Google Web OAuth Client ID</label>
+        <input id="clientIdInput" type="text" placeholder="貼上 xxxx.apps.googleusercontent.com" />
+      </div>
+      <p style="color: var(--muted); font-size: 12px; margin-top: -6px;">
+        ※ 請填入與 Android 版同一個 Google Cloud 專案的「網頁應用程式」用戶端 ID（僅儲存在本機瀏覽器）。
+      </p>
+      <div style="display: flex; gap: 10px; margin-top: 16px;">
+        <button class="primary" onclick="startGoogleLogin()">使用 Google 帳號登入並同步</button>
+      </div>
+    </section>
+
+    <!-- 主收藏庫畫面 -->
+    <section id="appSection" class="hidden">
+      <div class="status-bar">
+        <span id="statusText">已連線 Google Drive</span>
+        <span id="fileInfoText"></span>
+      </div>
+
+      <div class="toolbar">
+        <input id="searchInput" type="text" placeholder="搜尋標題、備註、標籤或網址..." oninput="renderItems()" />
+        <select id="collectionFilter" style="width: auto; min-width: 150px;" onchange="renderItems()">
+          <option value="all">所有資料夾</option>
+          <option value="none">未分類</option>
+        </select>
+      </div>
+
+      <div class="chips" id="typeChips">
+        <button class="chip active" data-type="all" onclick="setTypeFilter('all')">全部類型</button>
+        <button class="chip" data-type="unread" onclick="setTypeFilter('unread')">未讀項目</button>
+        <button class="chip" data-type="link" onclick="setTypeFilter('link')">網頁連結</button>
+        <button class="chip" data-type="note" onclick="setTypeFilter('note')">文字筆記</button>
+        <button class="chip" data-type="image" onclick="setTypeFilter('image')">螢幕截圖</button>
+        <button class="chip" data-type="file" onclick="setTypeFilter('file')">本機文件</button>
+      </div>
+
+      <div id="itemsGrid" class="grid"></div>
+    </section>
+  </main>
+
+  <!-- 新增 / 編輯彈窗 -->
+  <div id="editorModal" class="modal-backdrop hidden">
+    <div class="modal">
+      <h3 id="editorTitle">新增收藏</h3>
+      <input type="hidden" id="editIndex" value="-1" />
+      <div class="form-group">
+        <label for="fieldType">類型</label>
+        <select id="fieldType">
+          <option value="link">網頁連結</option>
+          <option value="note">文字筆記</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="fieldTitle">標題</label>
+        <input id="fieldTitle" type="text" placeholder="輸入名稱或標題" />
+      </div>
+      <div class="form-group">
+        <label for="fieldUrl">網址（文字筆記可留空）</label>
+        <input id="fieldUrl" type="url" placeholder="https://..." />
+      </div>
+      <div class="form-group">
+        <label for="fieldTags">標籤（以逗號分隔）</label>
+        <input id="fieldTags" type="text" placeholder="例如：工作, AI, 美食" />
+      </div>
+      <div class="form-group">
+        <label for="fieldCollection">收藏夾</label>
+        <select id="fieldCollection">
+          <option value="">未分類</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="fieldNote">備註／筆記內文</label>
+        <textarea id="fieldNote" rows="4" placeholder="輸入重點摘要或筆記內容"></textarea>
+      </div>
+      <div class="modal-footer">
+        <button onclick="closeEditor()">取消</button>
+        <button class="primary" id="btnSaveItem" onclick="saveItem()">儲存並同步至雲端</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script>
+    const SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
+    const CLIENT_ID_KEY = 'mytuckii_web_client_id';
+
+    let accessToken = null;
+    let tokenClient = null;
+    let syncFileId = null;
+    let syncFileName = 'mytuckii_sync.json';
+    let rawPayload = {};
+    let itemsKey = 'items';
+    let collectionsKey = 'collections';
+    let useSnakeCase = false;
+    let useIsoDate = false;
+    let currentTypeFilter = 'all';
+
+    window.addEventListener('DOMContentLoaded', () => {
+      const savedId = localStorage.getItem(CLIENT_ID_KEY) || '';
+      document.getElementById('clientIdInput').value = savedId;
+    });
+
+    function showToast(msg) {
+      const el = document.getElementById('toast');
+      el.textContent = msg;
+      el.classList.remove('hidden');
+      clearTimeout(el._timer);
+      el._timer = setTimeout(() => el.classList.add('hidden'), 3000);
+    }
+
+    function startGoogleLogin() {
+      const clientId = document.getElementById('clientIdInput').value.trim();
+      if (!clientId) {
+        alert('請先填入 Google Web OAuth Client ID');
+        return;
+      }
+      localStorage.setItem(CLIENT_ID_KEY, clientId);
+
+      if (!window.google || !google.accounts || !google.accounts.oauth2) {
+        alert('Google 登入元件尚未載入完成，請稍候 2 秒再試。');
+        return;
+      }
+
+      tokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: clientId,
+        scope: SCOPE,
+        callback: async (resp) => {
+          if (resp.error) {
+            alert('Google 授權失敗：' + resp.error);
+            return;
+          }
+          accessToken = resp.access_token;
+          document.getElementById('authSection').classList.add('hidden');
+          document.getElementById('appSection').classList.remove('hidden');
+          ['btnAdd', 'btnSync', 'btnInspect', 'btnSignOut'].forEach(id =>
+            document.getElementById(id).classList.remove('hidden')
+          );
+          await syncFromDrive();
+        }
+      });
+
+      tokenClient.requestAccessToken({ prompt: '' });
+    }
+
+    function signOut() {
+      accessToken = null;
+      syncFileId = null;
+      rawPayload = {};
+      document.getElementById('authSection').classList.remove('hidden');
+      document.getElementById('appSection').classList.add('hidden');
+      ['btnAdd', 'btnSync', 'btnInspect', 'btnSignOut'].forEach(id =>
+        document.getElementById(id).classList.add('hidden')
+      );
+      showToast('已登出');
+    }
+
+    async function driveFetch(url, options = {}) {
+      const res = await fetch(url, {
+        ...options,
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          ...(options.headers || {})
+        }
+      });
+      if (res.status === 401) {
+        showToast('登入憑證已過期，請重新登入');
+        signOut();
+        throw new Error('Unauthorized');
+      }
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`Drive API 錯誤 (${res.status}): ${text}`);
+      }
+      return res;
+    }
+
+    async function syncFromDrive() {
+      document.getElementById('statusText').textContent = '正在連線 Google Drive 讀取收藏庫...';
+      try {
+        const listRes = await driveFetch(
+          'https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&fields=files(id,name,mimeType,modifiedTime,size)&pageSize=100'
+        );
+        const listData = await listRes.json();
+        const files = listData.files || [];
+        const jsonFile = files.find(f => f.name.toLowerCase().endsWith('.json'));
+
+        if (!jsonFile) {
+          syncFileId = null;
+          rawPayload = { items: [], collections: [] };
+          itemsKey = 'items';
+          collectionsKey = 'collections';
+          document.getElementById('statusText').textContent = '雲端尚無同步檔（新增項目後將自動建立）';
+          document.getElementById('fileInfoText').textContent = `appDataFolder 共 ${files.length} 個檔案`;
+          populateCollections();
+          renderItems();
+          return;
+        }
+
+        syncFileId = jsonFile.id;
+        syncFileName = jsonFile.name;
+
+        const contentRes = await driveFetch(
+          `https://www.googleapis.com/drive/v3/files/${syncFileId}?alt=media`
+        );
+        rawPayload = await contentRes.json();
+        detectSchema(rawPayload);
+
+        const modTime = jsonFile.modifiedTime ? new Date(jsonFile.modifiedTime).toLocaleString() : '';
+        document.getElementById('statusText').textContent = `同步完成（${new Date().toLocaleTimeString()}）`;
+        document.getElementById('fileInfoText').textContent = `檔案：${syncFileName} · 更新：${modTime}`;
+        populateCollections();
+        renderItems();
+        showToast('已同步最新收藏資料');
+      } catch (err) {
+        document.getElementById('statusText').textContent = '同步失敗：' + err.message;
+        console.error(err);
+      }
+    }
+
+    function detectSchema(payload) {
+      if (Array.isArray(payload.savedItems)) itemsKey = 'savedItems';
+      else if (Array.isArray(payload.saved_items)) itemsKey = 'saved_items';
+      else if (Array.isArray(payload.items)) itemsKey = 'items';
+      else {
+        payload.items = [];
+        itemsKey = 'items';
+      }
+
+      if (Array.isArray(payload.collections)) collectionsKey = 'collections';
+      else {
+        payload.collections = [];
+        collectionsKey = 'collections';
+      }
+
+      const sample = payload[itemsKey][0];
+      if (sample) {
+        useSnakeCase = ('item_type' in sample) || ('is_deleted' in sample);
+        const dt = sample.createdAt ?? sample.created_at;
+        useIsoDate = typeof dt === 'string';
+      }
+    }
+
+    function getField(obj, camel, snake, fallback = null) {
+      if (obj[camel] !== undefined) return obj[camel];
+      if (obj[snake] !== undefined) return obj[snake];
+      return fallback;
+    }
+
+    function normalizeItem(raw, index) {
+      return {
+        index,
+        raw,
+        id: raw.id ?? raw.uuid ?? index,
+        title: raw.title || raw.url || '未命名項目',
+        url: raw.url || '',
+        note: raw.note || '',
+        tags: raw.tags || '',
+        itemType: getField(raw, 'itemType', 'item_type', 'link'),
+        collectionId: getField(raw, 'collectionId', 'collection_id', null),
+        isRead: Boolean(getField(raw, 'isRead', 'is_read', false)),
+        isPinned: Boolean(getField(raw, 'isPinned', 'is_pinned', false)),
+        isDeleted: Boolean(getField(raw, 'isDeleted', 'is_deleted', false)),
+        createdAt: getField(raw, 'createdAt', 'created_at', 0)
+      };
+    }
+
+    function populateCollections() {
+      const cols = (rawPayload[collectionsKey] || []).filter(
+        c => !Boolean(getField(c, 'isDeleted', 'is_deleted', false))
+      );
+      const filterEl = document.getElementById('collectionFilter');
+      const fieldEl = document.getElementById('fieldCollection');
+      const prevFilter = filterEl.value;
+
+      filterEl.innerHTML = '<option value="all">所有資料夾</option><option value="none">未分類</option>';
+      fieldEl.innerHTML = '<option value="">未分類</option>';
+
+      cols.forEach(c => {
+        const cid = c.id ?? c.uuid;
+        const opt1 = document.createElement('option');
+        opt1.value = String(cid);
+        opt1.textContent = c.name || '未命名資料夾';
+        filterEl.appendChild(opt1);
+
+        const opt2 = opt1.cloneNode(true);
+        fieldEl.appendChild(opt2);
+      });
+
+      if ([...filterEl.options].some(o => o.value === prevFilter)) {
+        filterEl.value = prevFilter;
+      }
+    }
+
+    function setTypeFilter(type) {
+      currentTypeFilter = type;
+      document.querySelectorAll('#typeChips .chip').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.type === type);
+      });
+      renderItems();
+    }
+
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function renderItems() {
+      const q = document.getElementById('searchInput').value.trim().toLowerCase();
+      const colFilter = document.getElementById('collectionFilter').value;
+      const rawList = rawPayload[itemsKey] || [];
+
+      const items = rawList
+        .map((r, i) => normalizeItem(r, i))
+        .filter(item => !item.isDeleted)
+        .filter(item => {
+          if (currentTypeFilter === 'unread') return !item.isRead;
+          if (currentTypeFilter !== 'all') return item.itemType === currentTypeFilter;
+          return true;
+        })
+        .filter(item => {
+          if (colFilter === 'all') return true;
+          if (colFilter === 'none') return item.collectionId === null || item.collectionId === '';
+          return String(item.collectionId) === colFilter;
+        })
+        .filter(item => {
+          if (!q) return true;
+          return (
+            item.title.toLowerCase().includes(q) ||
+            item.url.toLowerCase().includes(q) ||
+            item.note.toLowerCase().includes(q) ||
+            item.tags.toLowerCase().includes(q)
+          );
+        })
+        .sort((a, b) => {
+          if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
+          const ta = new Date(a.createdAt || 0).getTime();
+          const tb = new Date(b.createdAt || 0).getTime();
+          return tb - ta;
+        });
+
+      const grid = document.getElementById('itemsGrid');
+      if (items.length === 0) {
+        grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:var(--muted);padding:48px 0;">目前沒有符合條件的收藏項目</div>';
+        return;
+      }
+
+      const typeLabel = { link: '🔗 連結', note: '📝 筆記', image: '🖼️ 截圖', file: '📄 文件' };
+
+      grid.innerHTML = items.map(item => `
+        <article class="card">
+          <div>
+            <div class="card-top">
+              <span>${typeLabel[item.itemType] || item.itemType}${item.isPinned ? ' · 📌' : ''}${!item.isRead ? ' · 🔵 未讀' : ''}</span>
+            </div>
+            <div class="card-title">
+              ${item.url
+                ? `<a href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.title)}</a>`
+                : escapeHtml(item.title)}
+            </div>
+            ${item.note ? `<div class="card-note">${escapeHtml(item.note)}</div>` : ''}
+            ${item.tags ? `<div class="card-tags">#${escapeHtml(item.tags)}</div>` : ''}
+          </div>
+          <div class="card-actions">
+            ${item.url ? `<button onclick="copyText('${escapeHtml(item.url).replace(/'/g, "\\'")}')">複製網址</button>` : ''}
+            <button onclick="openEditor(${item.index})">編輯</button>
+            <button class="danger" onclick="softDeleteItem(${item.index})">刪除</button>
+          </div>
+        </article>
+      `).join('');
+    }
+
+    function copyText(text) {
+      navigator.clipboard.writeText(text).then(() => showToast('已複製到剪貼簿'));
+    }
+
+    function openEditor(index = -1) {
+      document.getElementById('editIndex').value = String(index);
+      if (index === -1) {
+        document.getElementById('editorTitle').textContent = '新增收藏';
+        document.getElementById('fieldType').value = 'link';
+        document.getElementById('fieldTitle').value = '';
+        document.getElementById('fieldUrl').value = '';
+        document.getElementById('fieldTags').value = '';
+        document.getElementById('fieldCollection').value = '';
+        document.getElementById('fieldNote').value = '';
+      } else {
+        const item = normalizeItem(rawPayload[itemsKey][index], index);
+        document.getElementById('editorTitle').textContent = '編輯收藏';
+        document.getElementById('fieldType').value = item.itemType === 'note' ? 'note' : 'link';
+        document.getElementById('fieldTitle').value = item.title;
+        document.getElementById('fieldUrl').value = item.url;
+        document.getElementById('fieldTags').value = item.tags;
+        document.getElementById('fieldCollection').value = item.collectionId != null ? String(item.collectionId) : '';
+        document.getElementById('fieldNote').value = item.note;
+      }
+      document.getElementById('editorModal').classList.remove('hidden');
+    }
+
+    function closeEditor() {
+      document.getElementById('editorModal').classList.add('hidden');
+    }
+
+    function makeTimestamp() {
+      return useIsoDate ? new Date().toISOString() : Date.now();
+    }
+
+    async function saveItem() {
+      const idx = parseInt(document.getElementById('editIndex').value, 10);
+      const type = document.getElementById('fieldType').value;
+      const url = document.getElementById('fieldUrl').value.trim();
+      const note = document.getElementById('fieldNote').value.trim();
+      let title = document.getElementById('fieldTitle').value.trim();
+      const tags = document.getElementById('fieldTags').value.trim();
+      const colVal = document.getElementById('fieldCollection').value;
+      const colId = colVal === '' ? null : (isNaN(Number(colVal)) ? colVal : Number(colVal));
+
+      if (!title) {
+        title = url || (note.length > 20 ? note.slice(0, 20) + '...' : note) || '未命名項目';
+      }
+
+      const now = makeTimestamp();
+      if (idx === -1) {
+        const newObj = useSnakeCase
+          ? {
+              uuid: crypto.randomUUID(),
+              item_type: url ? 'link' : type,
+              title,
+              url: url || null,
+              note: note || null,
+              tags: tags || null,
+              collection_id: colId,
+              is_read: false,
+              is_pinned: false,
+              is_deleted: false,
+              created_at: now,
+              updated_at: now
+            }
+          : {
+              uuid: crypto.randomUUID(),
+              itemType: url ? 'link' : type,
+              title,
+              url: url || null,
+              note: note || null,
+              tags: tags || null,
+              collectionId: colId,
+              isRead: false,
+              isPinned: false,
+              isDeleted: false,
+              createdAt: now,
+              updatedAt: now
+            };
+        rawPayload[itemsKey].unshift(newObj);
+      } else {
+        const target = rawPayload[itemsKey][idx];
+        target.title = title;
+        target.url = url || null;
+        target.note = note || null;
+        target.tags = tags || null;
+        if (useSnakeCase) {
+          target.collection_id = colId;
+          target.updated_at = now;
+        } else {
+          target.collectionId = colId;
+          target.updatedAt = now;
+        }
+      }
+
+      const btn = document.getElementById('btnSaveItem');
+      btn.disabled = true;
+      try {
+        await uploadToDrive();
+        closeEditor();
+        renderItems();
+        showToast('已儲存並同步至 Google Drive');
+      } catch (err) {
+        alert('上傳失敗：' + err.message);
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    async function softDeleteItem(index) {
+      if (!confirm('確定要將這筆項目移至回收桶並同步到雲端嗎？')) return;
+      const target = rawPayload[itemsKey][index];
+      const now = makeTimestamp();
+      if (useSnakeCase) {
+        target.is_deleted = true;
+        target.updated_at = now;
+      } else {
+        target.isDeleted = true;
+        target.updatedAt = now;
+      }
+      try {
+        await uploadToDrive();
+        renderItems();
+        showToast('已移至回收桶並同步');
+      } catch (err) {
+        alert('同步失敗：' + err.message);
+      }
+    }
+
+    async function uploadToDrive() {
+      const jsonStr = JSON.stringify(rawPayload);
+      if (syncFileId) {
+        await driveFetch(
+          `https://www.googleapis.com/upload/drive/v3/files/${syncFileId}?uploadType=media`,
+          {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: jsonStr
+          }
+        );
+      } else {
+        const boundary = 'mytuckii_sync_boundary';
+        const metadata = JSON.stringify({
+          name: syncFileName,
+          parents: ['appDataFolder']
+        });
+        const body =
+          `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metadata}\r\n` +
+          `--${boundary}\r\nContent-Type: application/json\r\n\r\n${jsonStr}\r\n--${boundary}--`;
+        const res = await driveFetch(
+          'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart',
+          {
+            method: 'POST',
+            headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
+            body
+          }
+        );
+        const created = await res.json();
+        syncFileId = created.id;
+      }
+      document.getElementById('statusText').textContent = `已同步至雲端（${new Date().toLocaleTimeString()}）`;
+    }
+
+    function inspectRawFile() {
+      const sample = (rawPayload[itemsKey] || []).slice(0, 2);
+      alert(
+        `同步檔名：${syncFileName}\n` +
+        `偵測欄位風格：${useSnakeCase ? 'snake_case' : 'camelCase'}\n` +
+        `資料鍵名：${itemsKey} (${(rawPayload[itemsKey] || []).length} 筆)\n\n` +
+        `前 2 筆範例：\n` + JSON.stringify(sample, null, 2)
+      );
+    }
+  </script>
+</body>
+</html>
