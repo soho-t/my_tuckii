@@ -7,6 +7,8 @@ import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../database/app_database.dart';
 
+typedef JsonMap = Map<String, dynamic>;
+
 class AiTagResult {
   final List<String> tags;
   final String? suggestedCollection;
@@ -64,7 +66,7 @@ class AiOrganizerService {
     return 'image/jpeg';
   }
 
-  static Future?> _buildImagePart(String? imagePath) async {
+  static Future<JsonMap?> _buildImagePart(String? imagePath) async {
     if (imagePath == null || imagePath.trim().isEmpty) return null;
     final file = File(imagePath);
     if (!await file.exists()) return null;
@@ -79,7 +81,7 @@ class AiOrganizerService {
   }
 
   static Future<String> _callGemini({
-    required List> parts,
+    required List<JsonMap> parts,
     bool jsonOutput = false,
     double temperature = 0.2,
   }) async {
@@ -92,7 +94,7 @@ class AiOrganizerService {
       'https://generativelanguage.googleapis.com/v1beta/models/$_modelName:generateContent?key=$apiKey',
     );
 
-    final generationConfig = <String, dynamic>{
+    final JsonMap generationConfig = {
       'temperature': temperature,
     };
     if (jsonOutput) {
@@ -175,7 +177,7 @@ class AiOrganizerService {
 {"tags": ["標籤1", "標籤2"], "collection": null, "title": null, "summary": null}
 ''';
 
-    final parts = >[
+    final List<JsonMap> parts = [
       {'text': prompt},
       if (imagePart != null) imagePart,
     ];
@@ -264,7 +266,7 @@ class AiOrganizerService {
 ${webContent.isNotEmpty ? '網頁正文摘錄：$webContent' : ''}
 ''';
 
-    final parts = >[
+    final List<JsonMap> parts = [
       {'text': prompt},
       if (imagePart != null) imagePart,
     ];
