@@ -49,7 +49,7 @@ jobs:
         run: |
           flutter build apk --release --build-number=${{ github.run_number }}
           flutter build appbundle --release --build-number=${{ github.run_number }}
-     - name: Extract Version and Rename Outputs
+      - name: Extract Version and Rename Outputs
         run: |
           APP_VER=$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d'+' -f1)
           echo "APP_VER=$APP_VER" >> $GITHUB_ENV
