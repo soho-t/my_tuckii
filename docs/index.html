@@ -468,44 +468,51 @@
       el._timer = setTimeout(() => el.classList.add('hidden'), 3000);
     }
 
-    function startGoogleLogin() {
-      const inputId = document.getElementById('clientIdInput').value.trim();
-      const clientId = inputId || (isValidDefaultId() ? DEFAULT_CLIENT_ID : '');
+function startGoogleLogin() {
+      try {
+        const inputId = document.getElementById('clientIdInput').value.trim();
+        const clientId = inputId || (isValidDefaultId() ? DEFAULT_CLIENT_ID : '');
 
-      if (!clientId) {
-        document.getElementById('advancedClientBox').open = true;
-        alert('尚未設定 Google Web OAuth Client ID，請先在進階設定中填入。');
-        return;
-      }
-
-      if (inputId && inputId !== DEFAULT_CLIENT_ID) {
-        localStorage.setItem(CLIENT_ID_KEY, inputId);
-      }
-
-      if (!window.google || !google.accounts || !google.accounts.oauth2) {
-        alert('Google 登入元件尚未載入完成，請稍候 2 秒再試。');
-        return;
-      }
-
-      tokenClient = google.accounts.oauth2.initTokenClient({
-        client_id: clientId,
-        scope: SCOPE,
-        callback: async (resp) => {
-          if (resp.error) {
-            alert('Google 授權失敗：' + resp.error);
-            return;
-          }
-          accessToken = resp.access_token;
-          document.getElementById('authSection').classList.add('hidden');
-          document.getElementById('appSection').classList.remove('hidden');
-          ['btnAdd', 'btnSync', 'btnInspect', 'btnSignOut'].forEach(id =>
-            document.getElementById(id).classList.remove('hidden')
-          );
-          await syncFromDrive();
+        if (!clientId) {
+          document.getElementById('advancedClientBox').open = true;
+          alert('尚未設定 Google Web OAuth Client ID，請先在進階設定中填入。');
+          return;
         }
-      });
 
-      tokenClient.requestAccessToken({ prompt: '' });
+        if (inputId && inputId !== DEFAULT_CLIENT_ID) {
+          localStorage.setItem(CLIENT_ID_KEY, inputId);
+        }
+
+        if (!window.google || !google.accounts || !google.accounts.oauth2) {
+          alert('Google 登入元件未能載入，請檢查瀏覽器是否開啟追蹤保護或廣告攔截器。');
+          return;
+        }
+
+        tokenClient = google.accounts.oauth2.initTokenClient({
+          client_id: clientId,
+          scope: SCOPE,
+          callback: async (resp) => {
+            if (resp.error) {
+              alert('Google 授權失敗：' + resp.error);
+              return;
+            }
+            accessToken = resp.access_token;
+            document.getElementById('authSection').classList.add('hidden');
+            document.getElementById('appSection').classList.remove('hidden');
+            ['btnAdd', 'btnSync', 'btnInspect', 'btnSignOut'].forEach(id =>
+              document.getElementById(id).classList.remove('hidden')
+            );
+            await syncFromDrive();
+          },
+          error_callback: (err) => {
+            alert('無法開啟 Google 登入視窗：' + (err.message || err.type || JSON.stringify(err)) + '\n\n請允許此網站開啟彈出型視窗。');
+          }
+        });
+
+        tokenClient.requestAccessToken({ prompt: 'select_account' });
+      } catch (e) {
+        alert('啟動 Google 登入時發生錯誤：' + e.message);
+      }
     }
 
     function signOut() {
