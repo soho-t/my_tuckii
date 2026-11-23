@@ -137,9 +137,7 @@
       text-align: center;
       margin-bottom: 12px;
     }
-    .file-drop-box input[type="file"] {
-      display: none;
-    }
+    .file-drop-box input[type="file"] { display: none; }
     .file-info {
       font-size: 12px;
       color: var(--primary-dark);
@@ -300,7 +298,7 @@
 <body>
   <header>
     <div class="brand">
-      🗂️ 隨手存 MyTuckii <span class="badge">Web 伴侶版 v1.9.1</span>
+      🗂️ 隨手存 MyTuckii <span class="badge">Web 伴侶版 v1.9.2</span>
     </div>
     <div class="header-actions" id="headerActions">
       <button id="btnAdd" class="primary hidden" onclick="openEditor()">＋ 新增收藏</button>
@@ -311,7 +309,6 @@
   </header>
 
   <main>
-    <!-- 登入畫面 -->
     <section id="authSection" class="panel setup-box">
       <h2>連線你的 Google Drive 收藏庫</h2>
       <p style="color: var(--muted); font-size: 14px;">
@@ -336,7 +333,6 @@
       </details>
     </section>
 
-    <!-- 主收藏庫畫面 -->
     <section id="appSection" class="hidden">
       <div class="status-bar">
         <span id="statusText">已連線 Google Drive</span>
@@ -364,7 +360,6 @@
     </section>
   </main>
 
-  <!-- 新增 / 編輯彈窗 -->
   <div id="editorModal" class="modal-backdrop hidden">
     <div class="modal">
       <h3 id="editorTitle">新增收藏</h3>
@@ -419,44 +414,24 @@
   <div id="toast" class="toast hidden"></div>
 
   <script>
-    // ▼▼▼ 請將下方替換成你在 Google Cloud 建立的「網頁應用程式」用戶端 ID ▼▼▼
     const DEFAULT_CLIENT_ID = '426482376122-sccskkkiak02aqve07fseh73poffhpj1.apps.googleusercontent.com';
-    // ▲▲▲ 替換完成後存檔推送，朋友打開網頁即可一鍵登入 ▲▲▲
-
+    const SYNC_INDEX_NAME = 'sync_index.json';
     const SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
     const CLIENT_ID_KEY = 'mytuckii_web_client_id';
 
     let accessToken = null;
     let tokenClient = null;
     let syncFileId = null;
-    let syncFileName = 'mytuckii_sync.json';
-    let rawPayload = {};
-    let itemsKey = 'items';
-    let collectionsKey = 'collections';
-    let useSnakeCase = false;
-    let useIsoDate = false;
-    let driveIdField = 'driveFileId';
+    let rawPayload = { version: 1, syncedAt: new Date().toISOString(), collections: [], items: [] };
     let currentTypeFilter = 'all';
 
-    // 雲端 appDataFolder 檔案索引（支援依 ID 或檔名反查）
-    let driveFilesById = {};
     let driveFilesByName = {};
     let selectedFile = null;
 
-    function isValidDefaultId() {
-      return DEFAULT_CLIENT_ID &&
-        DEFAULT_CLIENT_ID.endsWith('.apps.googleusercontent.com') &&
-        !DEFAULT_CLIENT_ID.includes('請替換');
-    }
-
     window.addEventListener('DOMContentLoaded', () => {
       const savedId = localStorage.getItem(CLIENT_ID_KEY) || '';
-      const activeId = savedId || (isValidDefaultId() ? DEFAULT_CLIENT_ID : '');
+      const activeId = savedId || DEFAULT_CLIENT_ID;
       document.getElementById('clientIdInput').value = activeId;
-
-      if (!activeId) {
-        document.getElementById('advancedClientBox').open = true;
-      }
     });
 
     function showToast(msg) {
@@ -467,10 +442,10 @@
       el._timer = setTimeout(() => el.classList.add('hidden'), 3000);
     }
 
-function startGoogleLogin() {
+    function startGoogleLogin() {
       try {
         const inputId = document.getElementById('clientIdInput').value.trim();
-        const clientId = inputId || (isValidDefaultId() ? DEFAULT_CLIENT_ID : '');
+        const clientId = inputId || DEFAULT_CLIENT_ID;
 
         if (!clientId) {
           document.getElementById('advancedClientBox').open = true;
@@ -483,7 +458,7 @@ function startGoogleLogin() {
         }
 
         if (!window.google || !google.accounts || !google.accounts.oauth2) {
-          alert('Google 登入元件未能載入，請檢查瀏覽器是否開啟追蹤保護或廣告攔截器。');
+          alert('Google 登入元件尚未載入完成，請檢查瀏覽器追蹤保護設定並稍候重試。');
           return;
         }
 
@@ -504,7 +479,7 @@ function startGoogleLogin() {
             await syncFromDrive();
           },
           error_callback: (err) => {
-            alert('無法開啟 Google 登入視窗：' + (err.message || err.type || JSON.stringify(err)) + '\n\n請允許此網站開啟彈出型視窗。');
+            alert('無法開啟 Google 登入視窗：' + (err.message || err.type || JSON.stringify(err)) + '\n\n請允許瀏覽器開啟此網站的彈出型視窗。');
           }
         });
 
@@ -517,8 +492,7 @@ function startGoogleLogin() {
     function signOut() {
       accessToken = null;
       syncFileId = null;
-      rawPayload = {};
-      driveFilesById = {};
+      rawPayload = { version: 1, syncedAt: new Date().toISOString(), collections: [], items: [] };
       driveFilesByName = {};
       document.getElementById('authSection').classList.remove('hidden');
       document.getElementById('appSection').classList.add('hidden');
@@ -548,6 +522,100 @@ function startGoogleLogin() {
       return res;
     }
 
+    function toIsoString(val) {
+      if (!val) return new Date().toISOString();
+      if (typeof val === 'string') {
+        const d = new Date(val);
+        return isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
+      }
+      if (typeof val === 'number') {
+        return new Date(val).toISOString();
+      }
+      return new Date().toISOString();
+    }
+
+    function migrateAndRepairPayload(data) {
+      let repaired = false;
+      if (!data || typeof data !== 'object') {
+        data = { version: 1, syncedAt: new Date().toISOString(), collections: [], items: [] };
+        repaired = true;
+      }
+
+      if (!Array.isArray(data.collections)) {
+        data.collections = [];
+        repaired = true;
+      }
+
+      if (!Array.isArray(data.items)) {
+        if (Array.isArray(data.savedItems)) {
+          data.items = data.savedItems;
+          delete data.savedItems;
+          repaired = true;
+        } else {
+          data.items = [];
+          repaired = true;
+        }
+      }
+
+      data.collections = data.collections.map(c => {
+        const syncUuid = c.syncUuid || c.uuid || crypto.randomUUID();
+        const createdAt = toIsoString(c.createdAt || c.created_at);
+        const updatedAt = toIsoString(c.updatedAt || c.updated_at || createdAt);
+        if (!c.syncUuid || typeof c.createdAt !== 'string' || typeof c.updatedAt !== 'string') {
+          repaired = true;
+        }
+        return {
+          syncUuid,
+          name: c.name || '未命名資料夾',
+          iconName: c.iconName || c.icon_name || 'folder',
+          createdAt,
+          updatedAt,
+          isDeleted: Boolean(c.isDeleted ?? c.is_deleted ?? false)
+        };
+      });
+
+      data.items = data.items.map(i => {
+        const syncUuid = i.syncUuid || i.uuid || crypto.randomUUID();
+        const rawMedia = i.mediaFileName || i.localImagePath || i.local_image_path || null;
+        const mediaFileName = rawMedia ? String(rawMedia).split(/[\\/]/).pop() : null;
+        const createdAt = toIsoString(i.createdAt || i.created_at);
+        const updatedAt = toIsoString(i.updatedAt || i.updated_at || createdAt);
+        const itemType = i.itemType || i.item_type || 'link';
+        const collectionUuid = i.collectionUuid ?? i.collection_uuid ?? null;
+
+        if (
+          !i.syncUuid ||
+          'uuid' in i ||
+          'localImagePath' in i ||
+          'local_image_path' in i ||
+          'driveFileId' in i ||
+          typeof i.createdAt !== 'string' ||
+          typeof i.updatedAt !== 'string'
+        ) {
+          repaired = true;
+        }
+
+        return {
+          syncUuid,
+          collectionUuid: collectionUuid ? String(collectionUuid) : null,
+          itemType,
+          url: i.url || null,
+          title: i.title || i.url || '未命名項目',
+          note: i.note || null,
+          tags: i.tags || null,
+          mediaFileName,
+          isRead: Boolean(i.isRead ?? i.is_read ?? false),
+          isPinned: Boolean(i.isPinned ?? i.is_pinned ?? false),
+          isDeleted: Boolean(i.isDeleted ?? i.is_deleted ?? false),
+          createdAt,
+          updatedAt
+        };
+      });
+
+      data.version = 1;
+      return { payload: data, repaired };
+    }
+
     async function syncFromDrive() {
       document.getElementById('statusText').textContent = '正在連線 Google Drive 讀取收藏庫...';
       try {
@@ -557,20 +625,18 @@ function startGoogleLogin() {
         const listData = await listRes.json();
         const files = listData.files || [];
 
-        driveFilesById = {};
         driveFilesByName = {};
         files.forEach(f => {
-          driveFilesById[f.id] = f;
-          driveFilesByName[f.name] = f;
+          if (f.name) driveFilesByName[f.name] = f;
         });
 
-        const jsonFile = files.find(f => f.name.toLowerCase().endsWith('.json'));
+        // 清理舊版誤建的 mytuckii_sync.json（若同時存在）
+        const legacyFile = driveFilesByName['mytuckii_sync.json'];
+        const indexFile = driveFilesByName[SYNC_INDEX_NAME];
 
-        if (!jsonFile) {
+        if (!indexFile && !legacyFile) {
           syncFileId = null;
-          rawPayload = { items: [], collections: [] };
-          itemsKey = 'items';
-          collectionsKey = 'collections';
+          rawPayload = { version: 1, syncedAt: new Date().toISOString(), collections: [], items: [] };
           document.getElementById('statusText').textContent = '雲端尚無同步檔（新增項目後將自動建立）';
           document.getElementById('fileInfoText').textContent = `appDataFolder 共 ${files.length} 個檔案`;
           populateCollections();
@@ -578,117 +644,40 @@ function startGoogleLogin() {
           return;
         }
 
-        syncFileId = jsonFile.id;
-        syncFileName = jsonFile.name;
-
+        const targetFile = indexFile || legacyFile;
         const contentRes = await driveFetch(
-          `https://www.googleapis.com/drive/v3/files/${syncFileId}?alt=media`
+          `https://www.googleapis.com/drive/v3/files/${targetFile.id}?alt=media`
         );
-        rawPayload = await contentRes.json();
-        detectSchema(rawPayload);
+        const fetchedJson = await contentRes.json();
+        const { payload, repaired } = migrateAndRepairPayload(fetchedJson);
+        rawPayload = payload;
+        syncFileId = indexFile ? indexFile.id : null;
 
-        const modTime = jsonFile.modifiedTime ? new Date(jsonFile.modifiedTime).toLocaleString() : '';
+        if (repaired || !indexFile) {
+          await uploadToDrive();
+          if (legacyFile && legacyFile.id) {
+            try {
+              await driveFetch(`https://www.googleapis.com/drive/v3/files/${legacyFile.id}`, { method: 'DELETE' });
+            } catch (_) {}
+          }
+        }
+
+        const modTime = targetFile.modifiedTime ? new Date(targetFile.modifiedTime).toLocaleString() : '';
+        const attachmentCount = Object.keys(driveFilesByName).filter(n => !n.endsWith('.json')).length;
         document.getElementById('statusText').textContent = `同步完成（${new Date().toLocaleTimeString()}）`;
         document.getElementById('fileInfoText').textContent =
-          `檔案：${syncFileName} · 雲端附件 ${Math.max(0, files.length - 1)} 個 · 更新：${modTime}`;
+          `索引：${SYNC_INDEX_NAME} · 雲端附件 ${attachmentCount} 個 · 更新：${modTime}`;
         populateCollections();
         renderItems();
-        showToast('已同步最新收藏資料');
+        showToast(repaired ? '已自動修復同步格式並完成更新！' : '已同步最新收藏資料');
       } catch (err) {
         document.getElementById('statusText').textContent = '同步失敗：' + err.message;
         console.error(err);
       }
     }
 
-    function detectSchema(payload) {
-      if (Array.isArray(payload.savedItems)) itemsKey = 'savedItems';
-      else if (Array.isArray(payload.saved_items)) itemsKey = 'saved_items';
-      else if (Array.isArray(payload.items)) itemsKey = 'items';
-      else {
-        payload.items = [];
-        itemsKey = 'items';
-      }
-
-      if (Array.isArray(payload.collections)) collectionsKey = 'collections';
-      else {
-        payload.collections = [];
-        collectionsKey = 'collections';
-      }
-
-      const list = payload[itemsKey];
-      const sample = list[0];
-      if (sample) {
-        useSnakeCase = ('item_type' in sample) || ('is_deleted' in sample);
-        const dt = sample.createdAt ?? sample.created_at;
-        useIsoDate = typeof dt === 'string';
-      }
-
-      const mediaSample = list.find(i => {
-        const t = i.itemType ?? i.item_type;
-        return t === 'image' || t === 'file';
-      });
-      if (mediaSample) {
-        const candidates = ['driveFileId', 'drive_file_id', 'cloudFileId', 'cloud_file_id', 'remoteFileId', 'remote_file_id'];
-        const foundKey = candidates.find(k => k in mediaSample);
-        if (foundKey) driveIdField = foundKey;
-        else driveIdField = useSnakeCase ? 'drive_file_id' : 'driveFileId';
-      } else {
-        driveIdField = useSnakeCase ? 'drive_file_id' : 'driveFileId';
-      }
-    }
-
-    function getField(obj, camel, snake, fallback = null) {
-      if (obj[camel] !== undefined) return obj[camel];
-      if (obj[snake] !== undefined) return obj[snake];
-      return fallback;
-    }
-
-    function findDriveFileForItem(raw) {
-      const idCandidates = [
-        raw.driveFileId, raw.drive_file_id,
-        raw.cloudFileId, raw.cloud_file_id,
-        raw.remoteFileId, raw.remote_file_id
-      ].filter(Boolean);
-
-      for (const id of idCandidates) {
-        if (driveFilesById[id]) return driveFilesById[id];
-      }
-
-      const pathStr = getField(raw, 'localImagePath', 'local_image_path', '') || raw.fileName || '';
-      if (pathStr) {
-        const baseName = pathStr.split(/[\\/]/).pop();
-        if (baseName && driveFilesByName[baseName]) return driveFilesByName[baseName];
-      }
-      if (raw.uuid) {
-        const byUuid = Object.values(driveFilesById).find(f => f.name.includes(raw.uuid));
-        if (byUuid) return byUuid;
-      }
-      return null;
-    }
-
-    function normalizeItem(raw, index) {
-      return {
-        index,
-        raw,
-        id: raw.id ?? raw.uuid ?? index,
-        title: raw.title || raw.url || '未命名項目',
-        url: raw.url || '',
-        note: raw.note || '',
-        tags: raw.tags || '',
-        itemType: getField(raw, 'itemType', 'item_type', 'link'),
-        collectionId: getField(raw, 'collectionId', 'collection_id', null),
-        isRead: Boolean(getField(raw, 'isRead', 'is_read', false)),
-        isPinned: Boolean(getField(raw, 'isPinned', 'is_pinned', false)),
-        isDeleted: Boolean(getField(raw, 'isDeleted', 'is_deleted', false)),
-        createdAt: getField(raw, 'createdAt', 'created_at', 0),
-        driveFile: findDriveFileForItem(raw)
-      };
-    }
-
     function populateCollections() {
-      const cols = (rawPayload[collectionsKey] || []).filter(
-        c => !Boolean(getField(c, 'isDeleted', 'is_deleted', false))
-      );
+      const cols = (rawPayload.collections || []).filter(c => !c.isDeleted);
       const filterEl = document.getElementById('collectionFilter');
       const fieldEl = document.getElementById('fieldCollection');
       const prevFilter = filterEl.value;
@@ -697,9 +686,8 @@ function startGoogleLogin() {
       fieldEl.innerHTML = '<option value="">未分類</option>';
 
       cols.forEach(c => {
-        const cid = c.id ?? c.uuid;
         const opt1 = document.createElement('option');
-        opt1.value = String(cid);
+        opt1.value = c.syncUuid;
         opt1.textContent = c.name || '未命名資料夾';
         filterEl.appendChild(opt1);
 
@@ -739,35 +727,37 @@ function startGoogleLogin() {
     function renderItems() {
       const q = document.getElementById('searchInput').value.trim().toLowerCase();
       const colFilter = document.getElementById('collectionFilter').value;
-      const rawList = rawPayload[itemsKey] || [];
+      const rawList = rawPayload.items || [];
 
       const items = rawList
-        .map((r, i) => normalizeItem(r, i))
-        .filter(item => !item.isDeleted)
-        .filter(item => {
-          if (currentTypeFilter === 'unread') return !item.isRead;
-          if (currentTypeFilter !== 'all') return item.itemType === currentTypeFilter;
+        .map((raw, index) => ({
+          index,
+          raw,
+          driveFile: raw.mediaFileName ? driveFilesByName[raw.mediaFileName] : null
+        }))
+        .filter(({ raw }) => !raw.isDeleted)
+        .filter(({ raw }) => {
+          if (currentTypeFilter === 'unread') return !raw.isRead;
+          if (currentTypeFilter !== 'all') return raw.itemType === currentTypeFilter;
           return true;
         })
-        .filter(item => {
+        .filter(({ raw }) => {
           if (colFilter === 'all') return true;
-          if (colFilter === 'none') return item.collectionId === null || item.collectionId === '';
-          return String(item.collectionId) === colFilter;
+          if (colFilter === 'none') return !raw.collectionUuid;
+          return raw.collectionUuid === colFilter;
         })
-        .filter(item => {
+        .filter(({ raw }) => {
           if (!q) return true;
           return (
-            item.title.toLowerCase().includes(q) ||
-            item.url.toLowerCase().includes(q) ||
-            item.note.toLowerCase().includes(q) ||
-            item.tags.toLowerCase().includes(q)
+            (raw.title || '').toLowerCase().includes(q) ||
+            (raw.url || '').toLowerCase().includes(q) ||
+            (raw.note || '').toLowerCase().includes(q) ||
+            (raw.tags || '').toLowerCase().includes(q)
           );
         })
         .sort((a, b) => {
-          if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
-          const ta = new Date(a.createdAt || 0).getTime();
-          const tb = new Date(b.createdAt || 0).getTime();
-          return tb - ta;
+          if (a.raw.isPinned !== b.raw.isPinned) return a.raw.isPinned ? -1 : 1;
+          return new Date(b.raw.createdAt || 0).getTime() - new Date(a.raw.createdAt || 0).getTime();
         });
 
       const grid = document.getElementById('itemsGrid');
@@ -778,26 +768,26 @@ function startGoogleLogin() {
 
       const typeLabel = { link: '🔗 連結', note: '📝 筆記', image: '🖼️ 截圖', file: '📄 文件' };
 
-      grid.innerHTML = items.map(item => `
+      grid.innerHTML = items.map(({ index, raw, driveFile }) => `
         <article class="card">
           <div>
             <div class="card-top">
-              <span>${typeLabel[item.itemType] || item.itemType}${item.isPinned ? ' · 📌' : ''}${!item.isRead ? ' · 🔵 未讀' : ''}</span>
-              ${item.driveFile && item.driveFile.size ? `<span>${formatBytes(item.driveFile.size)}</span>` : ''}
+              <span>${typeLabel[raw.itemType] || raw.itemType}${raw.isPinned ? ' · 📌' : ''}${!raw.isRead ? ' · 🔵 未讀' : ''}</span>
+              ${driveFile && driveFile.size ? `<span>${formatBytes(driveFile.size)}</span>` : ''}
             </div>
             <div class="card-title">
-              ${item.url
-                ? `<a href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.title)}</a>`
-                : escapeHtml(item.title)}
+              ${raw.url
+                ? `<a href="${escapeHtml(raw.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(raw.title)}</a>`
+                : escapeHtml(raw.title)}
             </div>
-            ${item.note ? `<div class="card-note">${escapeHtml(item.note)}</div>` : ''}
-            ${item.tags ? `<div class="card-tags">#${escapeHtml(item.tags)}</div>` : ''}
+            ${raw.note ? `<div class="card-note">${escapeHtml(raw.note)}</div>` : ''}
+            ${raw.tags ? `<div class="card-tags">#${escapeHtml(raw.tags)}</div>` : ''}
           </div>
           <div class="card-actions">
-            ${item.driveFile ? `<button onclick="downloadDriveFile('${escapeHtml(item.driveFile.id)}', '${escapeHtml(item.title).replace(/'/g, "\\'")}', '${escapeHtml(item.driveFile.mimeType || '')}')">開啟／下載</button>` : ''}
-            ${item.url ? `<button onclick="copyText('${escapeHtml(item.url).replace(/'/g, "\\'")}')">複製網址</button>` : ''}
-            <button onclick="openEditor(${item.index})">編輯</button>
-            <button class="danger" onclick="softDeleteItem(${item.index})">刪除</button>
+            ${driveFile ? `<button onclick="downloadDriveFile('${escapeHtml(driveFile.id)}', '${escapeHtml(raw.title).replace(/'/g, "\\'")}', '${escapeHtml(driveFile.mimeType || '')}')">開啟／下載</button>` : ''}
+            ${raw.url ? `<button onclick="copyText('${escapeHtml(raw.url).replace(/'/g, "\\'")}')">複製網址</button>` : ''}
+            <button onclick="openEditor(${index})">編輯</button>
+            <button class="danger" onclick="softDeleteItem(${index})">刪除</button>
           </div>
         </article>
       `).join('');
@@ -878,15 +868,15 @@ function startGoogleLogin() {
         document.getElementById('fieldCollection').value = '';
         document.getElementById('fieldNote').value = '';
       } else {
-        const item = normalizeItem(rawPayload[itemsKey][index], index);
+        const raw = rawPayload.items[index];
         document.getElementById('editorTitle').textContent = '編輯收藏';
         document.getElementById('fileDropBox').classList.add('hidden');
-        document.getElementById('fieldType').value = item.itemType || 'link';
-        document.getElementById('fieldTitle').value = item.title;
-        document.getElementById('fieldUrl').value = item.url;
-        document.getElementById('fieldTags').value = item.tags;
-        document.getElementById('fieldCollection').value = item.collectionId != null ? String(item.collectionId) : '';
-        document.getElementById('fieldNote').value = item.note;
+        document.getElementById('fieldType').value = raw.itemType || 'link';
+        document.getElementById('fieldTitle').value = raw.title || '';
+        document.getElementById('fieldUrl').value = raw.url || '';
+        document.getElementById('fieldTags').value = raw.tags || '';
+        document.getElementById('fieldCollection').value = raw.collectionUuid || '';
+        document.getElementById('fieldNote').value = raw.note || '';
       }
       onTypeChanged();
       document.getElementById('editorModal').classList.remove('hidden');
@@ -894,10 +884,6 @@ function startGoogleLogin() {
 
     function closeEditor() {
       document.getElementById('editorModal').classList.add('hidden');
-    }
-
-    function makeTimestamp() {
-      return useIsoDate ? new Date().toISOString() : Date.now();
     }
 
     async function uploadBinaryToDrive(file, savedName) {
@@ -933,8 +919,7 @@ function startGoogleLogin() {
       const note = document.getElementById('fieldNote').value.trim();
       let title = document.getElementById('fieldTitle').value.trim();
       const tags = document.getElementById('fieldTags').value.trim();
-      const colVal = document.getElementById('fieldCollection').value;
-      const colId = colVal === '' ? null : (isNaN(Number(colVal)) ? colVal : Number(colVal));
+      const colUuid = document.getElementById('fieldCollection').value || null;
 
       if (idx === -1 && (type === 'file' || type === 'image') && !selectedFile) {
         alert('請先點選上方「選取電腦檔案」選擇要上傳的檔案或圖片。');
@@ -951,76 +936,48 @@ function startGoogleLogin() {
       btn.textContent = selectedFile ? '正在上傳檔案並同步...' : '正在同步至雲端...';
 
       try {
-        const now = makeTimestamp();
-        let uploadedMeta = null;
+        const now = new Date().toISOString();
         let savedFileName = null;
 
         if (idx === -1 && selectedFile) {
           savedFileName = `${Date.now()}_${selectedFile.name}`;
-          uploadedMeta = await uploadBinaryToDrive(selectedFile, savedFileName);
-          driveFilesById[uploadedMeta.id] = uploadedMeta;
+          const uploadedMeta = await uploadBinaryToDrive(selectedFile, savedFileName);
           driveFilesByName[uploadedMeta.name] = uploadedMeta;
         }
 
         if (idx === -1) {
           const finalType = selectedFile ? type : (url ? 'link' : type);
-          const newObj = useSnakeCase
-            ? {
-                uuid: crypto.randomUUID(),
-                item_type: finalType,
-                title,
-                url: (finalType === 'link' && url) ? url : null,
-                note: note || null,
-                tags: tags || null,
-                local_image_path: savedFileName,
-                collection_id: colId,
-                is_read: false,
-                is_pinned: false,
-                is_deleted: false,
-                created_at: now,
-                updated_at: now
-              }
-            : {
-                uuid: crypto.randomUUID(),
-                itemType: finalType,
-                title,
-                url: (finalType === 'link' && url) ? url : null,
-                note: note || null,
-                tags: tags || null,
-                localImagePath: savedFileName,
-                collectionId: colId,
-                isRead: false,
-                isPinned: false,
-                isDeleted: false,
-                createdAt: now,
-                updatedAt: now
-              };
-
-          if (uploadedMeta) {
-            newObj[driveIdField] = uploadedMeta.id;
-          }
-          rawPayload[itemsKey].unshift(newObj);
+          rawPayload.items.unshift({
+            syncUuid: crypto.randomUUID(),
+            collectionUuid: colUuid,
+            itemType: finalType,
+            url: (finalType === 'link' && url) ? url : null,
+            title,
+            note: note || null,
+            tags: tags || null,
+            mediaFileName: savedFileName,
+            isRead: false,
+            isPinned: false,
+            isDeleted: false,
+            createdAt: now,
+            updatedAt: now
+          });
         } else {
-          const target = rawPayload[itemsKey][idx];
+          const target = rawPayload.items[idx];
           target.title = title;
-          if (type === 'link') {
+          if (target.itemType === 'link') {
             target.url = url || null;
           }
           target.note = note || null;
           target.tags = tags || null;
-          if (useSnakeCase) {
-            target.collection_id = colId;
-            target.updated_at = now;
-          } else {
-            target.collectionId = colId;
-            target.updatedAt = now;
-          }
+          target.collectionUuid = colUuid;
+          target.updatedAt = now;
         }
 
         await uploadToDrive();
         closeEditor();
         renderItems();
-        showToast(uploadedMeta ? '檔案已上傳並同步至 Google Drive！' : '已儲存並同步至 Google Drive');
+        showToast(savedFileName ? '檔案已上傳並同步！手機點同步即可下載' : '已儲存並同步至 Google Drive');
       } catch (err) {
         alert('上傳失敗：' + err.message);
       } finally {
@@ -1031,15 +988,9 @@ function startGoogleLogin() {
 
     async function softDeleteItem(index) {
       if (!confirm('確定要將這筆項目移至回收桶並同步到雲端嗎？')) return;
-      const target = rawPayload[itemsKey][index];
-      const now = makeTimestamp();
-      if (useSnakeCase) {
-        target.is_deleted = true;
-        target.updated_at = now;
-      } else {
-        target.isDeleted = true;
-        target.updatedAt = now;
-      }
+      const target = rawPayload.items[index];
+      target.isDeleted = true;
+      target.updatedAt = new Date().toISOString();
       try {
         await uploadToDrive();
         renderItems();
@@ -1050,7 +1001,10 @@ function startGoogleLogin() {
     }
 
     async function uploadToDrive() {
+      rawPayload.version = 1;
+      rawPayload.syncedAt = new Date().toISOString();
       const jsonStr = JSON.stringify(rawPayload);
+
       if (syncFileId) {
         await driveFetch(
           `https://www.googleapis.com/upload/drive/v3/files/${syncFileId}?uploadType=media`,
@@ -1063,7 +1017,7 @@ function startGoogleLogin() {
       } else {
         const boundary = 'mytuckii_sync_boundary';
         const metadata = JSON.stringify({
-          name: syncFileName,
+          name: SYNC_INDEX_NAME,
           parents: ['appDataFolder']
         });
         const body =
@@ -1084,12 +1038,11 @@ function startGoogleLogin() {
     }
 
     function inspectRawFile() {
-      const sample = (rawPayload[itemsKey] || []).slice(0, 2);
+      const sample = (rawPayload.items || []).slice(0, 2);
       alert(
-        `同步檔名：${syncFileName}\n` +
-        `偵測欄位風格：${useSnakeCase ? 'snake_case' : 'camelCase'}\n` +
-        `附件 ID 鍵名：${driveIdField}\n` +
-        `資料鍵名：${itemsKey} (${(rawPayload[itemsKey] || []).length} 筆)\n\n` +
+        `索引檔名：${SYNC_INDEX_NAME}\n` +
+        `總項目數：${(rawPayload.items || []).length} 筆\n` +
+        `雲端附件數：${Object.keys(driveFilesByName).filter(n => !n.endsWith('.json')).length} 個\n\n` +
         `前 2 筆範例：\n` + JSON.stringify(sample, null, 2)
       );
     }
