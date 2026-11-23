@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:drift/drift.dart' as drift;
 import 'package:file_picker/file_picker.dart';
@@ -5,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:metadata_fetch/metadata_fetch.dart';
 import 'package:open_filex/open_filex.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -35,14 +37,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   int? _selectedCollectionId;
   bool _isSyncing = false;
 
-  // 第一階段：外觀與收錄設定狀態
+  // 動態版本號與網頁 OG 封面圖快取
+  String _appVersion = '1.4.1';
+  Map<String, String> _linkCoverCache = {};
+
+  // 外觀與收錄設定
   bool _highContrastMode = false;
   bool _enhancedPreview = true;
   bool _detectClipboardOnOpen = false;
   String? _lastExportTime;
   String? _lastPromptedClipUrl;
 
-  // 第二階段：提醒與連結健康檢查狀態
+  // 提醒與連結健康檢查狀態
   bool _notifPermissionGranted = false;
   bool _dailyReviewEnabled = true;
   int _dailyReviewHour = 21;
@@ -52,6 +58,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _weekendReminderEnabled = false;
   bool _linkHealthCheckEnabled = false;
   bool _isCheckingLinks = false;
+  int _scanCurrent = 0;
+  int _scanTotal = 0;
 
   final Set<int> _selectedIds = {};
   List<SavedItem> _currentItems = [];
@@ -134,8 +142,31 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _loadAppSettings() async {
     final prefs = await SharedPreferences.getInstance();
     final granted = await ReminderService.isPermissionGranted();
+
+    String detectedVersion = _appVersion;
+    try {
+      final info = await PackageInfo.fromPlatform();
+      detectedVersion = '${info.version}+${info.buildNumber}';
+    } catch (_) {}
+
+    Map<String, String> loadedCovers = {};
+    try {
+      final rawJson = prefs.getString('setting_link_cover_cache');
+      if (rawJson != null && rawJson.isNotEmpty) {
+        final decoded = jsonDecode(rawJson);
+        if (decoded is Map) {
+          loadedCovers = decoded.map(
+            (k, v) => MapEntry(k.toString(), v.toString()),
+          );
+        }
+      }
+    } catch (_) {}
+
     if (!mounted) return;
     setState(() {
+      _appVersion = detectedVersion;
+      _linkCoverCache = loadedCovers;
+
       _highContrastMode = prefs.getBool('setting_high_contrast') ?? false;
       _enhancedPreview = prefs.getBool('setting_enhanced_preview') ?? true;
       _detectClipboardOnOpen = prefs.getBool('setting_detect_clipboard') ?? false;
@@ -161,6 +192,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (_linkHealthCheckEnabled) {
       _autoRunWeeklyLinkHealthCheck(prefs);
     }
+  }
+
+  Future<void> _saveLinkCover(String url, String imageUrl) async {
+    final trimmed = imageUrl.trim();
+    if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
+      return;
+    }
+    _linkCoverCache[url] = trimmed;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('setting_link_cover_cache', jsonEncode(_linkCoverCache));
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _ensureNotifPermissionIfEnabling(
+    bool enabling,
+    StateSetter setSheetState,
+  ) async {
+    if (!enabling || _notifPermissionGranted) return;
+    final ok = await ReminderService.requestPermission();
+    setSheetState(() => _notifPermissionGranted = ok);
+    if (mounted) setState(() => _notifPermissionGranted = ok);
   }
 
   Future<void> _autoRunWeeklyLinkHealthCheck(SharedPreferences prefs) async {
@@ -777,7 +829,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                 '增強預覽',
                                 style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
                               ),
-                              subtitle: const Text('存入網址時自動在背景載入公開頁面以取得標題與摘要'),
+                              subtitle: const Text('存入網址時自動在背景載入公開頁面以取得標題、摘要與封面圖'),
                               value: _enhancedPreview,
                               onChanged: (val) async {
                                 final prefs = await SharedPreferences.getInstance();
@@ -858,6 +910,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               subtitle: Text('每天約 $timeStr 隨機挑 1–3 則舊收藏給你'),
                               value: _dailyReviewEnabled,
                               onChanged: (val) async {
+                                await _ensureNotifPermissionIfEnabling(val, setSheetState);
                                 final prefs = await SharedPreferences.getInstance();
                                 await prefs.setBool('rem_daily_enabled', val);
                                 setSheetState(() => _dailyReviewEnabled = val);
@@ -916,6 +969,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                 onPressed: () async {
                                   final ok = await ReminderService.requestPermission();
                                   setSheetState(() => _notifPermissionGranted = ok);
+                                  if (mounted) setState(() => _notifPermissionGranted = ok);
                                   if (ok) {
                                     await ReminderService.sendInstantReviewPreview(widget.db);
                                   }
@@ -933,9 +987,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                 '久未看提醒',
                                 style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
                               ),
-                              subtitle: Text('每週最多一次，告訴你有幾則超過 $_staleDays 天沒看'),
+                              subtitle: Text('每週提醒你整理超過 $_staleDays 天沒看的收藏'),
                               value: _staleReminderEnabled,
                               onChanged: (val) async {
+                                await _ensureNotifPermissionIfEnabling(val, setSheetState);
                                 final prefs = await SharedPreferences.getInstance();
                                 await prefs.setBool('rem_stale_enabled', val);
                                 setSheetState(() => _staleReminderEnabled = val);
@@ -980,6 +1035,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               subtitle: const Text('週五 19:00 提醒你清單上還沒去的店、還沒看的收藏'),
                               value: _weekendReminderEnabled,
                               onChanged: (val) async {
+                                await _ensureNotifPermissionIfEnabling(val, setSheetState);
                                 final prefs = await SharedPreferences.getInstance();
                                 await prefs.setBool('rem_weekend_enabled', val);
                                 setSheetState(() => _weekendReminderEnabled = val);
@@ -1014,14 +1070,28 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                 onPressed: _isCheckingLinks
                                     ? null
                                     : () async {
-                                        setSheetState(() => _isCheckingLinks = true);
+                                        setSheetState(() {
+                                          _isCheckingLinks = true;
+                                          _scanCurrent = 0;
+                                          _scanTotal = 0;
+                                        });
                                         try {
-                                          final res = await ReminderService.runLinkHealthCheck(widget.db);
+                                          final res = await ReminderService.runLinkHealthCheck(
+                                            widget.db,
+                                            onProgress: (current, total) {
+                                              if (ctx.mounted) {
+                                                setSheetState(() {
+                                                  _scanCurrent = current;
+                                                  _scanTotal = total;
+                                                });
+                                              }
+                                            },
+                                          );
                                           if (mounted) {
                                             ScaffoldMessenger.of(context).showSnackBar(
                                               SnackBar(
                                                 content: Text(
-                                                  '健康檢查完成！共掃描 ${res.checked} 個連結，發現 ${res.broken} 個失效連結。',
+                                                  '健康檢查完成！共掃描 ${res.checked} 個連結，新發現 ${res.broken} 個失效連結。',
                                                 ),
                                               ),
                                             );
@@ -1039,7 +1109,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                         child: CircularProgressIndicator(strokeWidth: 2),
                                       )
                                     : const Icon(Icons.health_and_safety_outlined, size: 18),
-                                label: Text(_isCheckingLinks ? '正在掃描收藏連結...' : '立即掃描所有連結健康度'),
+                                label: Text(
+                                  _isCheckingLinks
+                                      ? (_scanTotal > 0
+                                          ? '掃描中 ($_scanCurrent / $_scanTotal)...'
+                                          : '準備掃描連結...')
+                                      : '立即掃描所有連結健康度',
+                                ),
                               ),
                             ),
                           ],
@@ -1157,7 +1233,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             ),
                             const SizedBox(height: 2),
                             Text(
-                              '版本 1.4.0',
+                              '版本 $_appVersion',
                               style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
                             ),
                             const Divider(height: 20),
@@ -1178,7 +1254,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               title: const Text('隱私權政策與專案首頁'),
                               trailing: const Icon(Icons.open_in_new, size: 18),
                               onTap: () => launchUrl(
-                                Uri.parse('https://github.com/sohot-t/my_tuckii'),
+                                Uri.parse('https://github.com/soho-t/my_tuckii'),
                                 mode: LaunchMode.externalApplication,
                               ),
                             ),
@@ -1437,11 +1513,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  Widget _buildDefaultPlaceholder(bool isImage) {
+    return Container(
+      color: Theme.of(context).colorScheme.secondaryContainer,
+      child: Icon(
+        isImage ? Icons.cloud_download_outlined : Icons.link_rounded,
+        size: 40,
+        color: Theme.of(context).colorScheme.onSecondaryContainer,
+      ),
+    );
+  }
+
   Widget _buildItemCard(SavedItem item) {
     final isImage = item.itemType == 'image';
     final isNote = item.itemType == 'note';
     final isFile = item.itemType == 'file';
     final hasLocalImage = isImage && item.localImagePath != null && File(item.localImagePath!).existsSync();
+    final coverUrl = (!isImage && !isNote && !isFile && item.url != null)
+        ? _linkCoverCache[item.url!]
+        : null;
     final isSelected = _selectedIds.contains(item.id);
     final ext = item.localImagePath != null
         ? p.extension(item.localImagePath!).replaceAll('.', '').toUpperCase()
@@ -1525,15 +1615,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             ],
                           ),
                         )
+                      else if (coverUrl != null)
+                        Image.network(
+                          coverUrl,
+                          fit: BoxFit.cover,
+                          cacheWidth: 400,
+                          errorBuilder: (_, __, ___) => _buildDefaultPlaceholder(false),
+                        )
                       else
-                        Container(
-                          color: Theme.of(context).colorScheme.secondaryContainer,
-                          child: Icon(
-                            isImage ? Icons.cloud_download_outlined : Icons.link_rounded,
-                            size: 40,
-                            color: Theme.of(context).colorScheme.onSecondaryContainer,
-                          ),
-                        ),
+                        _buildDefaultPlaceholder(isImage),
                       if (isSelected)
                         Container(color: Theme.of(context).colorScheme.primary.withOpacity(0.25)),
                     ],
@@ -2006,8 +2096,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             collectionId: drift.Value(selectedColId),
                           ),
                         );
-                    if (customTitle.isEmpty && _enhancedPreview) {
-                      _fetchTitleInBackground(itemId, cleanUrl);
+                    if (_enhancedPreview) {
+                      _fetchTitleInBackground(
+                        itemId,
+                        cleanUrl,
+                        updateTitle: customTitle.isEmpty,
+                      );
                     }
                   } else {
                     final noteTitle = customTitle.isNotEmpty
@@ -2037,10 +2131,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  Future<void> _fetchTitleInBackground(int itemId, String url) async {
+  Future<void> _fetchTitleInBackground(
+    int itemId,
+    String url, {
+    bool updateTitle = true,
+  }) async {
     try {
       final data = await MetadataFetch.extract(url);
-      if (data != null && data.title != null && data.title!.trim().isNotEmpty) {
+      if (data == null) return;
+
+      if (data.image != null && data.image!.trim().isNotEmpty) {
+        await _saveLinkCover(url, data.image!.trim());
+      }
+
+      if (updateTitle && data.title != null && data.title!.trim().isNotEmpty) {
         await (widget.db.update(widget.db.savedItems)..where((t) => t.id.equals(itemId))).write(
           SavedItemsCompanion(
             title: drift.Value(data.title!.trim()),

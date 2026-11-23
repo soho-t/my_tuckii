@@ -51,7 +51,6 @@ class ReminderService {
     _initialized = true;
   }
 
-  /// 檢查 App 是否由點擊通知冷啟動，若是則回傳對應 payload
   static Future<String?> getLaunchPayload() async {
     await init();
     final details = await _plugin.getNotificationAppLaunchDetails();
@@ -78,7 +77,7 @@ class ReminderService {
     return granted ?? false;
   }
 
-  /// 重新排程所有本機通知（未來 14 天不重複每日回顧 + 久未看 + 週末提醒）
+  /// 重新排程所有本機通知（未來 14 天不重複每日回顧 + 通用文案每週提醒）
   static Future<void> rescheduleAll(AppDatabase db) async {
     await init();
     await _plugin.cancelAll();
@@ -101,7 +100,7 @@ class ReminderService {
         .get();
     final unreadItems = allItems.where((i) => !i.isRead).toList();
 
-    // 1. 每日回顧：預排未來 14 天獨立推播 (ID: 201~214)，每天抽不同待讀項目
+    // 1. 每日回顧：預排未來 14 天獨立推播 (ID: 201~214)
     if (dailyEnabled) {
       final baseTime = _nextTimeOfDay(dailyHour, dailyMinute);
       final random = Random();
@@ -139,25 +138,18 @@ class ReminderService {
       }
     }
 
-    // 2. 久未看提醒：每週日 20:00 統計超過 N 天未讀項目 (ID: 102)
+    // 2. 久未看提醒：每週日 20:00（採通用語氣，避免靜態數字失真）
     if (staleEnabled) {
-      final cutoff = DateTime.now().subtract(Duration(days: staleDays));
-      final staleCount =
-          unreadItems.where((i) => i.createdAt.isBefore(cutoff)).length;
-      final body = staleCount > 0
-          ? '目前有 $staleCount 則收藏超過 $staleDays 天還沒看，抽空滑卡片清理一下吧！'
-          : '太棒了！目前沒有超過 $staleDays 天未看的積壓收藏。';
-
       await _plugin.zonedSchedule(
         102,
         '隨手存 · 久未看提醒',
-        body,
+        '看看有沒有放超過 $staleDays 天還沒讀的收藏，抽空滑卡片整理一下吧！',
         _nextWeekdayTime(DateTime.sunday, 20, 0),
         const NotificationDetails(
           android: AndroidNotificationDetails(
             'stale_reminder_channel',
             '久未看提醒',
-            channelDescription: '每週統計超過指定天數未看的收藏',
+            channelDescription: '每週提醒整理放太久未看的收藏',
             importance: Importance.defaultImportance,
             priority: Priority.defaultPriority,
           ),
@@ -170,17 +162,12 @@ class ReminderService {
       );
     }
 
-    // 3. 清單週末提醒：每週五 19:00 提醒 (ID: 103)
+    // 3. 清單週末提醒：每週五 19:00（採通用語氣）
     if (weekendEnabled) {
-      final count = unreadItems.length;
-      final body = count > 0
-          ? '週末到了！清單裡還有 $count 則未讀收藏（想去的店、想看的文章），趁週末來看看吧！'
-          : '週末愉快！打開隨手存整理這週的新靈感吧。';
-
       await _plugin.zonedSchedule(
         103,
         '隨手存 · 週末清單提醒',
-        body,
+        '週末到了！打開隨手存看看清單裡想去的店、想做的菜或待讀靈感吧！',
         _nextWeekdayTime(DateTime.friday, 19, 0),
         const NotificationDetails(
           android: AndroidNotificationDetails(
@@ -200,7 +187,6 @@ class ReminderService {
     }
   }
 
-  /// 立即發送一則每日回顧測試通知（點擊可直接測試跳轉複習模式）
   static Future<void> sendInstantReviewPreview(AppDatabase db) async {
     await init();
     final allItems = await (db.select(db.savedItems)
@@ -233,10 +219,11 @@ class ReminderService {
     );
   }
 
-  /// 掃描連結健康度（支援 YouTube / Spotify / X oEmbed 與一般網頁；自動執行時可限定 Wi-Fi）
+  /// 分批並發掃描連結健康度（每批 5 條、略過已標記 #失效連結、支援即時進度回報）
   static Future<LinkHealthResult> runLinkHealthCheck(
     AppDatabase db, {
     bool requireWifi = false,
+    void Function(int current, int total)? onProgress,
   }) async {
     if (requireWifi) {
       try {
@@ -251,87 +238,40 @@ class ReminderService {
       } catch (_) {}
     }
 
-    final linkItems = await (db.select(db.savedItems)
+    final allLinks = await (db.select(db.savedItems)
           ..where((t) => t.isDeleted.equals(false) & t.itemType.equals('link')))
         .get();
 
+    // 過濾出有效網址且尚未標記為失效連結的項目
+    final targets = allLinks.where((item) {
+      final rawUrl = item.url?.trim() ?? '';
+      if (rawUrl.isEmpty || Uri.tryParse(rawUrl) == null) return false;
+      if ((item.tags ?? '').contains('失效連結')) return false;
+      return true;
+    }).toList();
+
+    final total = targets.length;
+    onProgress?.call(0, total);
+
     int checked = 0;
     int broken = 0;
+    const batchSize = 5;
 
-    for (final item in linkItems) {
-      final rawUrl = item.url?.trim();
-      if (rawUrl == null || rawUrl.isEmpty) continue;
-      final uri = Uri.tryParse(rawUrl);
-      if (uri == null) continue;
-
-      checked++;
-      bool isDead = false;
-
-      try {
-        if (rawUrl.contains('youtube.com/watch') ||
-            rawUrl.contains('youtu.be/') ||
-            rawUrl.contains('youtube.com/shorts/')) {
-          final oembed = Uri.parse(
-              'https://www.youtube.com/oembed?url=${Uri.encodeComponent(rawUrl)}&format=json');
-          final resp =
-              await http.get(oembed).timeout(const Duration(seconds: 6));
-          if (resp.statusCode == 404 ||
-              resp.statusCode == 401 ||
-              resp.statusCode == 403) {
-            isDead = true;
-          }
-        } else if (rawUrl.contains('open.spotify.com/')) {
-          final oembed = Uri.parse(
-              'https://open.spotify.com/oembed?url=${Uri.encodeComponent(rawUrl)}');
-          final resp =
-              await http.get(oembed).timeout(const Duration(seconds: 6));
-          if (resp.statusCode == 404 || resp.statusCode == 410) {
-            isDead = true;
-          }
-        } else if ((rawUrl.contains('x.com/') ||
-                rawUrl.contains('twitter.com/')) &&
-            rawUrl.contains('/status/')) {
-          final oembed = Uri.parse(
-              'https://publish.twitter.com/oembed?url=${Uri.encodeComponent(rawUrl)}');
-          final resp =
-              await http.get(oembed).timeout(const Duration(seconds: 6));
-          if (resp.statusCode == 404 || resp.statusCode == 403) {
-            isDead = true;
-          }
-        } else {
-          final resp = await http.head(uri, headers: {
-            'User-Agent': 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36',
-          }).timeout(const Duration(seconds: 6));
-          if (resp.statusCode == 404 || resp.statusCode == 410) {
-            isDead = true;
-          }
-        }
-      } catch (_) {
-        // 逾時或防爬蟲不誤判為失效
-      }
-
-      if (isDead) {
-        broken++;
-        final currentTags = item.tags ?? '';
-        if (!currentTags.contains('失效連結')) {
-          final updatedTags =
-              currentTags.isEmpty ? '失效連結' : '$currentTags, 失效連結';
-          await (db.update(db.savedItems)..where((t) => t.id.equals(item.id)))
-              .write(
-            SavedItemsCompanion(
-              tags: drift.Value(updatedTags),
-              updatedAt: drift.Value(DateTime.now()),
-            ),
-          );
-        }
-      }
+    for (int i = 0; i < targets.length; i += batchSize) {
+      final batch = targets.sublist(i, min(i + batchSize, targets.length));
+      final results = await Future.wait(
+        batch.map((item) => _checkSingleLink(db, item)),
+      );
+      checked += batch.length;
+      broken += results.where((isDead) => isDead).length;
+      onProgress?.call(checked, total);
     }
 
     if (broken > 0 && await isPermissionGranted()) {
       await _plugin.show(
         104,
         '隨手存 · 連結健康檢查結果',
-        '共檢查 $checked 個連結，發現 $broken 個原作連結已失效（點擊立即檢視 #失效連結）。',
+        '共掃描 $checked 個連結，新發現 $broken 個失效連結（點擊檢視 #失效連結）。',
         const NotificationDetails(
           android: AndroidNotificationDetails(
             'link_health_channel',
@@ -345,6 +285,66 @@ class ReminderService {
     }
 
     return LinkHealthResult(checked: checked, broken: broken);
+  }
+
+  static Future<bool> _checkSingleLink(AppDatabase db, SavedItem item) async {
+    final rawUrl = item.url!.trim();
+    final uri = Uri.parse(rawUrl);
+    bool isDead = false;
+
+    try {
+      if (rawUrl.contains('youtube.com/watch') ||
+          rawUrl.contains('youtu.be/') ||
+          rawUrl.contains('youtube.com/shorts/')) {
+        final oembed = Uri.parse(
+            'https://www.youtube.com/oembed?url=${Uri.encodeComponent(rawUrl)}&format=json');
+        final resp = await http.get(oembed).timeout(const Duration(seconds: 6));
+        if (resp.statusCode == 404 ||
+            resp.statusCode == 401 ||
+            resp.statusCode == 403) {
+          isDead = true;
+        }
+      } else if (rawUrl.contains('open.spotify.com/')) {
+        final oembed = Uri.parse(
+            'https://open.spotify.com/oembed?url=${Uri.encodeComponent(rawUrl)}');
+        final resp = await http.get(oembed).timeout(const Duration(seconds: 6));
+        if (resp.statusCode == 404 || resp.statusCode == 410) {
+          isDead = true;
+        }
+      } else if ((rawUrl.contains('x.com/') ||
+              rawUrl.contains('twitter.com/')) &&
+          rawUrl.contains('/status/')) {
+        final oembed = Uri.parse(
+            'https://publish.twitter.com/oembed?url=${Uri.encodeComponent(rawUrl)}');
+        final resp = await http.get(oembed).timeout(const Duration(seconds: 6));
+        if (resp.statusCode == 404 || resp.statusCode == 403) {
+          isDead = true;
+        }
+      } else {
+        final resp = await http.head(uri, headers: {
+          'User-Agent': 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36',
+        }).timeout(const Duration(seconds: 6));
+        if (resp.statusCode == 404 || resp.statusCode == 410) {
+          isDead = true;
+        }
+      }
+    } catch (_) {
+      // 逾時或防爬蟲不誤判為失效
+    }
+
+    if (isDead) {
+      final currentTags = item.tags ?? '';
+      final updatedTags = currentTags.isEmpty ? '失效連結' : '$currentTags, 失效連結';
+      await (db.update(db.savedItems)..where((t) => t.id.equals(item.id)))
+          .write(
+        SavedItemsCompanion(
+          tags: drift.Value(updatedTags),
+          updatedAt: drift.Value(DateTime.now()),
+        ),
+      );
+    }
+
+    return isDead;
   }
 
   static tz.TZDateTime _nextTimeOfDay(int hour, int minute) {
