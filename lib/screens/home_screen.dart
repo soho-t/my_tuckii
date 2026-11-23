@@ -17,6 +17,7 @@ import '../services/ai_organizer_service.dart';
 import '../services/backup_service.dart';
 import '../services/bookmark_importer.dart';
 import '../services/google_drive_sync_service.dart';
+import '../services/library_maintenance_service.dart';
 import '../services/reminder_service.dart';
 import '../services/share_handler.dart';
 import '../services/update_service.dart';
@@ -46,7 +47,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   String? _updateStatusText;
 
   // 動態版本號與網頁 OG 封面圖快取
-  String _appVersion = '1.7.0';
+  String _appVersion = '1.8.0';
   Map<String, String> _linkCoverCache = {};
 
   // 外觀與收錄設定
@@ -414,6 +415,592 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  // ==================== v1.8.0 回收桶面板 ====================
+
+  void _showTrashSheet() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFFFAF7F2),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.78,
+        minChildSize: 0.5,
+        maxChildSize: 0.94,
+        builder: (_, scrollController) => Column(
+          children: [
+            const SizedBox(height: 10),
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.brown.withOpacity(0.25),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 12, 12, 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Row(
+                    children: [
+                      Icon(Icons.delete_outline, color: Color(0xFF8C6239)),
+                      SizedBox(width: 8),
+                      Text(
+                        '回收桶',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF2C2520),
+                        ),
+                      ),
+                    ],
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.pop(ctx),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: StreamBuilder<List<SavedItem>>(
+                stream: LibraryMaintenanceService.watchTrashedItems(widget.db),
+                builder: (context, snapshot) {
+                  final trashed = snapshot.data ?? [];
+                  if (trashed.isEmpty) {
+                    return const Center(
+                      child: Text(
+                        '回收桶目前是空的\n刪除的收藏會暫存在這裡方便隨時救回。',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.grey),
+                      ),
+                    );
+                  }
+
+                  return Column(
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                onPressed: () async {
+                                  final count = await LibraryMaintenanceService.restoreAll(widget.db);
+                                  if (mounted && count > 0) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(content: Text('已還原全部 $count 筆收藏')),
+                                    );
+                                  }
+                                },
+                                icon: const Icon(Icons.restore, size: 18),
+                                label: Text('全部還原 (${trashed.length})'),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: Colors.red.shade700,
+                                  side: BorderSide(color: Colors.red.shade300),
+                                ),
+                                onPressed: () async {
+                                  final ok = await showDialog<bool>(
+                                    context: ctx,
+                                    builder: (dCtx) => AlertDialog(
+                                      title: const Text('清空回收桶？'),
+                                      content: Text('將永久刪除這 ${trashed.length} 筆項目與本機檔案，刪除後無法復原。'),
+                                      actions: [
+                                        TextButton(
+                                          onPressed: () => Navigator.pop(dCtx, false),
+                                          child: const Text('取消'),
+                                        ),
+                                        FilledButton(
+                                          style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                                          onPressed: () => Navigator.pop(dCtx, true),
+                                          child: const Text('永久清空'),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                  if (ok == true) {
+                                    await LibraryMaintenanceService.emptyTrash(widget.db);
+                                  }
+                                },
+                                icon: const Icon(Icons.delete_forever, size: 18),
+                                label: const Text('清空回收桶'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Expanded(
+                        child: ListView.builder(
+                          controller: scrollController,
+                          padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+                          itemCount: trashed.length,
+                          itemBuilder: (_, index) {
+                            final item = trashed[index];
+                            return Card(
+                              margin: const EdgeInsets.only(bottom: 8),
+                              child: ListTile(
+                                leading: Icon(
+                                  item.itemType == 'image'
+                                      ? Icons.screenshot
+                                      : (item.itemType == 'file'
+                                          ? Icons.description_outlined
+                                          : (item.itemType == 'note'
+                                              ? Icons.sticky_note_2_outlined
+                                              : Icons.link)),
+                                  color: Colors.grey.shade700,
+                                ),
+                                title: Text(
+                                  item.title,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                subtitle: Text(
+                                  item.tags?.isNotEmpty == true
+                                      ? '#${item.tags}'
+                                      : (item.url ?? item.itemType),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                trailing: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    IconButton(
+                                      tooltip: '還原',
+                                      icon: const Icon(Icons.restore, color: Color(0xFF4A7C59)),
+                                      onPressed: () =>
+                                          LibraryMaintenanceService.restoreItem(widget.db, item.id),
+                                    ),
+                                    IconButton(
+                                      tooltip: '永久刪除',
+                                      icon: Icon(Icons.delete_forever, color: Colors.red.shade600),
+                                      onPressed: () =>
+                                          LibraryMaintenanceService.permanentlyDeleteItem(widget.db, item),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ==================== v1.8.0 標籤雲與標籤管理面板 ====================
+
+  void _showTagManagerSheet() {
+    List<TagStat> stats = [];
+    bool loading = true;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFFFAF7F2),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) {
+          Future<void> reload() async {
+            final data = await LibraryMaintenanceService.getAllTagStats(widget.db);
+            if (ctx.mounted) {
+              setSheetState(() {
+                stats = data;
+                loading = false;
+              });
+            }
+          }
+
+          if (loading) {
+            reload();
+          }
+
+          return DraggableScrollableSheet(
+            expand: false,
+            initialChildSize: 0.78,
+            minChildSize: 0.5,
+            maxChildSize: 0.94,
+            builder: (_, scrollController) => Column(
+              children: [
+                const SizedBox(height: 10),
+                Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.brown.withOpacity(0.25),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 12, 12, 8),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Row(
+                        children: [
+                          Icon(Icons.sell_outlined, color: Color(0xFF8C6239)),
+                          SizedBox(width: 8),
+                          Text(
+                            '標籤總覽與管理',
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF2C2520),
+                            ),
+                          ),
+                        ],
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close),
+                        onPressed: () => Navigator.pop(ctx),
+                      ),
+                    ],
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+                  child: Text(
+                    '點選標籤即可快速篩選收藏；點右側編輯可重新命名或輸入既有標籤名稱來合併同義詞。',
+                    style: TextStyle(color: Colors.grey.shade700, fontSize: 12),
+                  ),
+                ),
+                Expanded(
+                  child: loading
+                      ? const Center(child: CircularProgressIndicator())
+                      : stats.isEmpty
+                          ? const Center(
+                              child: Text(
+                                '目前還沒有任何標籤\n試著在編輯卡片時加上標籤，或用 AI 一鍵整理吧！',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(color: Colors.grey),
+                              ),
+                            )
+                          : ListView.builder(
+                              controller: scrollController,
+                              padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+                              itemCount: stats.length,
+                              itemBuilder: (_, i) {
+                                final t = stats[i];
+                                return Card(
+                                  margin: const EdgeInsets.only(bottom: 8),
+                                  child: ListTile(
+                                    leading: const Icon(Icons.tag, color: Color(0xFF7A5C3E)),
+                                    title: Text(
+                                      '#${t.name}',
+                                      style: const TextStyle(fontWeight: FontWeight.w600),
+                                    ),
+                                    subtitle: Text('${t.count} 筆收藏'),
+                                    onTap: () {
+                                      Navigator.pop(ctx);
+                                      setState(() {
+                                        _selectedFilter = 'all';
+                                        _selectedCollectionId = null;
+                                        _searchController.text = t.name;
+                                        _searchQuery = t.name;
+                                      });
+                                    },
+                                    trailing: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        IconButton(
+                                          tooltip: '重新命名或合併',
+                                          icon: const Icon(Icons.edit_outlined, size: 20),
+                                          onPressed: () async {
+                                            final ctrl = TextEditingController(text: t.name);
+                                            final newName = await showDialog<String>(
+                                              context: ctx,
+                                              builder: (dCtx) => AlertDialog(
+                                                title: Text('重新命名／合併「#${t.name}」'),
+                                                content: TextField(
+                                                  controller: ctrl,
+                                                  autofocus: true,
+                                                  decoration: const InputDecoration(
+                                                    labelText: '新標籤名稱',
+                                                    hintText: '輸入既有標籤名稱即可自動合併',
+                                                    border: OutlineInputBorder(),
+                                                  ),
+                                                ),
+                                                actions: [
+                                                  TextButton(
+                                                    onPressed: () => Navigator.pop(dCtx),
+                                                    child: const Text('取消'),
+                                                  ),
+                                                  FilledButton(
+                                                    onPressed: () =>
+                                                        Navigator.pop(dCtx, ctrl.text.trim()),
+                                                    child: const Text('套用'),
+                                                  ),
+                                                ],
+                                              ),
+                                            );
+                                            if (newName != null &&
+                                                newName.isNotEmpty &&
+                                                newName != t.name) {
+                                              await LibraryMaintenanceService.renameOrMergeTag(
+                                                widget.db,
+                                                t.name,
+                                                newName,
+                                              );
+                                              await reload();
+                                            }
+                                          },
+                                        ),
+                                        IconButton(
+                                          tooltip: '從所有收藏移除此標籤',
+                                          icon: Icon(Icons.delete_outline,
+                                              size: 20, color: Colors.red.shade600),
+                                          onPressed: () async {
+                                            final ok = await showDialog<bool>(
+                                              context: ctx,
+                                              builder: (dCtx) => AlertDialog(
+                                                title: Text('移除標籤「#${t.name}」？'),
+                                                content: Text('會從 ${t.count} 筆收藏中移除此標籤，不會刪除收藏本身。'),
+                                                actions: [
+                                                  TextButton(
+                                                    onPressed: () => Navigator.pop(dCtx, false),
+                                                    child: const Text('取消'),
+                                                  ),
+                                                  FilledButton(
+                                                    style: FilledButton.styleFrom(
+                                                        backgroundColor: Colors.red),
+                                                    onPressed: () => Navigator.pop(dCtx, true),
+                                                    child: const Text('移除'),
+                                                  ),
+                                                ],
+                                              ),
+                                            );
+                                            if (ok == true) {
+                                              await LibraryMaintenanceService.deleteTagFromAll(
+                                                widget.db,
+                                                t.name,
+                                              );
+                                              await reload();
+                                            }
+                                          },
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  // ==================== v1.8.0 重複連結偵測與合併面板 ====================
+
+  void _showDuplicateCleanerSheet() {
+    List<DuplicateGroup> groups = [];
+    bool loading = true;
+    bool merging = false;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFFFAF7F2),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) {
+          Future<void> scan() async {
+            final res = await LibraryMaintenanceService.findDuplicateLinks(widget.db);
+            if (ctx.mounted) {
+              setSheetState(() {
+                groups = res;
+                loading = false;
+              });
+            }
+          }
+
+          if (loading) {
+            scan();
+          }
+
+          return DraggableScrollableSheet(
+            expand: false,
+            initialChildSize: 0.78,
+            minChildSize: 0.5,
+            maxChildSize: 0.94,
+            builder: (_, scrollController) => Column(
+              children: [
+                const SizedBox(height: 10),
+                Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.brown.withOpacity(0.25),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 12, 12, 8),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Row(
+                        children: [
+                          Icon(Icons.cleaning_services_outlined, color: Color(0xFF8C6239)),
+                          SizedBox(width: 8),
+                          Text(
+                            '重複連結偵測與合併',
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF2C2520),
+                            ),
+                          ),
+                        ],
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close),
+                        onPressed: () => Navigator.pop(ctx),
+                      ),
+                    ],
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+                  child: Text(
+                    '自動忽略 utm、fbclid 等追蹤參數比對重複網址；合併時會保留最完整的一筆並整併標籤，多餘項目移入回收桶。',
+                    style: TextStyle(color: Colors.grey.shade700, fontSize: 12),
+                  ),
+                ),
+                if (!loading && groups.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: FilledButton.icon(
+                        onPressed: merging
+                            ? null
+                            : () async {
+                                setSheetState(() => merging = true);
+                                try {
+                                  final removed =
+                                      await LibraryMaintenanceService.mergeAllDuplicates(widget.db);
+                                  await scan();
+                                  if (mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(content: Text('合併完成！已整理並移入回收桶 $removed 筆重複連結。')),
+                                    );
+                                  }
+                                } finally {
+                                  if (ctx.mounted) setSheetState(() => merging = false);
+                                }
+                              },
+                        icon: merging
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2, color: Colors.white),
+                              )
+                            : const Icon(Icons.merge_type, size: 18),
+                        label: Text('一鍵合併全部 ${groups.length} 組重複連結'),
+                      ),
+                    ),
+                  ),
+                Expanded(
+                  child: loading
+                      ? const Center(child: CircularProgressIndicator())
+                      : groups.isEmpty
+                          ? const Center(
+                              child: Text(
+                                '太乾淨了！目前沒有發現重複的網頁連結。',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(color: Colors.grey),
+                              ),
+                            )
+                          : ListView.builder(
+                              controller: scrollController,
+                              padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+                              itemCount: groups.length,
+                              itemBuilder: (_, idx) {
+                                final g = groups[idx];
+                                return Card(
+                                  margin: const EdgeInsets.only(bottom: 10),
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(14),
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            Expanded(
+                                              child: Text(
+                                                g.normalizedUrl,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(
+                                                  fontWeight: FontWeight.bold,
+                                                  fontSize: 13,
+                                                  color: Color(0xFF5A4328),
+                                                ),
+                                              ),
+                                            ),
+                                            const SizedBox(width: 8),
+                                            TextButton(
+                                              onPressed: merging
+                                                  ? null
+                                                  : () async {
+                                                      await LibraryMaintenanceService
+                                                          .mergeDuplicateGroup(widget.db, g);
+                                                      await scan();
+                                                    },
+                                              child: const Text('合併這組'),
+                                            ),
+                                          ],
+                                        ),
+                                        const Divider(height: 10),
+                                        ...g.items.map((item) => Padding(
+                                              padding: const EdgeInsets.symmetric(vertical: 2),
+                                              child: Text(
+                                                '• ${item.title}${item.tags?.isNotEmpty == true ? ' (#${item.tags})' : ''}',
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(fontSize: 13),
+                                              ),
+                                            )),
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   /// 自然語言智慧搜尋面板（AI 找收藏）
   void _showAiSearchSheet() {
     if (_geminiApiKey.isEmpty) {
@@ -701,7 +1288,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ),
             const SizedBox(height: 6),
             TextButton.icon(
-              onPressed: () => _openExternalUrl('[https://aistudio.google.com/apikey](https://aistudio.google.com/apikey)'),
+              onPressed: () => _openExternalUrl('https://aistudio.google.com/apikey'),
               icon: const Icon(Icons.open_in_new, size: 16),
               label: const Text('前往 Google AI Studio 免費申請金鑰', style: TextStyle(fontSize: 12)),
             ),
@@ -1127,6 +1714,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   _buildFilterChip('網頁連結', 'link'),
                   const SizedBox(width: 8),
                   _buildFilterChip('文字筆記', 'note'),
+                  const SizedBox(width: 8),
+                  ActionChip(
+                    avatar: const Icon(Icons.sell_outlined, size: 16),
+                    label: const Text('標籤'),
+                    onPressed: _showTagManagerSheet,
+                  ),
                 ],
               ),
             ),
@@ -1171,6 +1764,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         avatar: const Icon(Icons.create_new_folder_outlined, size: 16),
                         label: const Text('新增'),
                         onPressed: _showCreateCollectionDialog,
+                      ),
+                      const SizedBox(width: 8),
+                      ActionChip(
+                        avatar: const Icon(Icons.delete_outline, size: 16),
+                        label: const Text('回收桶'),
+                        onPressed: _showTrashSheet,
                       ),
                     ],
                   ),
@@ -1568,6 +2167,61 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                       : '一鍵整理所有無標籤收藏（含截圖識圖）',
                                 ),
                               ),
+                            ),
+                          ],
+                        ),
+                      ),
+
+                      const SizedBox(height: 20),
+
+                      _buildSectionHeader('🗂️ 收藏庫維護'),
+                      _buildSettingsCard(
+                        child: Column(
+                          children: [
+                            ListTile(
+                              contentPadding: EdgeInsets.zero,
+                              leading: const Icon(Icons.sell_outlined, color: Color(0xFF7A5C3E)),
+                              title: const Text(
+                                '標籤總覽與管理',
+                                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                              ),
+                              subtitle: const Text('檢視常用標籤、批次改名或合併同義標籤'),
+                              trailing: const Icon(Icons.chevron_right),
+                              onTap: () {
+                                Navigator.pop(ctx);
+                                _showTagManagerSheet();
+                              },
+                            ),
+                            const Divider(),
+                            ListTile(
+                              contentPadding: EdgeInsets.zero,
+                              leading: const Icon(Icons.cleaning_services_outlined,
+                                  color: Color(0xFF7A5C3E)),
+                              title: const Text(
+                                '偵測與合併重複連結',
+                                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                              ),
+                              subtitle: const Text('忽略追蹤參數比對重複網址，保留完整內容並整併標籤'),
+                              trailing: const Icon(Icons.chevron_right),
+                              onTap: () {
+                                Navigator.pop(ctx);
+                                _showDuplicateCleanerSheet();
+                              },
+                            ),
+                            const Divider(),
+                            ListTile(
+                              contentPadding: EdgeInsets.zero,
+                              leading: const Icon(Icons.delete_outline, color: Color(0xFF7A5C3E)),
+                              title: const Text(
+                                '回收桶',
+                                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                              ),
+                              subtitle: const Text('還原誤刪項目，或永久清空釋放手機空間'),
+                              trailing: const Icon(Icons.chevron_right),
+                              onTap: () {
+                                Navigator.pop(ctx);
+                                _showTrashSheet();
+                              },
                             ),
                           ],
                         ),
@@ -2144,7 +2798,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               contentPadding: EdgeInsets.zero,
                               title: const Text('隱私權政策與專案首頁'),
                               trailing: const Icon(Icons.open_in_new, size: 18),
-                              onTap: () => _openExternalUrl('[https://github.com/soho-t/my_tuckii](https://github.com/soho-t/my_tuckii)'),
+                              onTap: () => _openExternalUrl('https://github.com/soho-t/my_tuckii'),
                             ),
                           ],
                         ),
@@ -2733,10 +3387,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       ),
                       IconButton(
                         icon: const Icon(Icons.delete_outline, color: Colors.red),
-                        tooltip: '刪除',
+                        tooltip: '移至回收桶',
                         onPressed: () async {
-                          await widget.db.softDeleteItem(item);
+                          await (widget.db.update(widget.db.savedItems)
+                                ..where((t) => t.id.equals(item.id)))
+                              .write(SavedItemsCompanion(
+                            isDeleted: const drift.Value(true),
+                            updatedAt: drift.Value(DateTime.now()),
+                          ));
                           if (ctx.mounted) Navigator.pop(ctx);
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: const Text('已移至回收桶'),
+                                action: SnackBarAction(
+                                  label: '復原',
+                                  onPressed: () =>
+                                      LibraryMaintenanceService.restoreItem(widget.db, item.id),
+                                ),
+                              ),
+                            );
+                          }
                         },
                       ),
                     ],
@@ -3307,20 +3978,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('刪除這 $count 個項目？'),
-        content: const Text('刪除後將一併移除本機截圖與文件檔案，且雲端同步時也會一併移除。'),
+        title: Text('將這 $count 個項目移至回收桶？'),
+        content: const Text('項目會先移至回收桶保留，日後仍可還原，或到回收桶永久清空。'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () async {
-              final itemsToDelete =
-                  _currentItems.where((item) => _selectedIds.contains(item.id)).toList();
-              await widget.db.batchDeleteItems(itemsToDelete);
+              final ids = _selectedIds.toList();
+              await (widget.db.update(widget.db.savedItems)
+                    ..where((t) => t.id.isIn(ids)))
+                  .write(SavedItemsCompanion(
+                isDeleted: const drift.Value(true),
+                updatedAt: drift.Value(DateTime.now()),
+              ));
               setState(() => _selectedIds.clear());
               if (ctx.mounted) Navigator.pop(ctx);
             },
-            child: const Text('全部刪除'),
+            child: const Text('移至回收桶'),
           ),
         ],
       ),
