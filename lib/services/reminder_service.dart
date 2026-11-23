@@ -1,4 +1,4 @@
-import 'dart:math';
+﻿import 'dart:math';
 import 'package:drift/drift.dart' as drift;
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:http/http.dart' as http;
@@ -25,7 +25,7 @@ class ReminderService {
     _initialized = true;
   }
 
-  /// 檢查目前是否已允許通知權限
+  /// 瑼Ｘ?桀??臬撌脣?閮梢甈?
   static Future<bool> isPermissionGranted() async {
     await init();
     final androidImpl = _plugin.resolvePlatformSpecificImplementation<
@@ -34,7 +34,7 @@ class ReminderService {
     return await androidImpl.areNotificationsEnabled() ?? false;
   }
 
-  /// 請求 Android 13+ 通知權限
+  /// 隢? Android 13+ ?甈?
   static Future<bool> requestPermission() async {
     await init();
     final androidImpl = _plugin.resolvePlatformSpecificImplementation<
@@ -44,7 +44,7 @@ class ReminderService {
     return granted ?? false;
   }
 
-  /// 根據最新設定與資料庫內容，重新排程所有本機定時通知
+  /// ?寞???啗身摰?鞈?摨怠摰對??????璈??
   static Future<void> rescheduleAll(AppDatabase db) async {
     await init();
     await _plugin.cancelAll();
@@ -67,25 +67,25 @@ class ReminderService {
         .get();
     final unreadItems = allItems.where((i) => !i.isRead).toList();
 
-    // 1. 每日回顧排程 (ID: 101)
+    // 1. 瘥?“?? (ID: 101)
     if (dailyEnabled) {
-      String body = '打開隨手存，回顧你收藏的精彩內容吧！';
+      String body = '???冽?摮??“雿??蝎曉蔗?批捆?改?';
       if (unreadItems.isNotEmpty) {
         final shuffled = List.of(unreadItems)..shuffle(Random());
-        final picks = shuffled.take(min(3, shuffled.length)).map((e) => '• ${e.title}').join('\n');
-        body = '為你挑選 ${min(3, shuffled.length)} 則待讀收藏：\n$picks';
+        final picks = shuffled.take(min(3, shuffled.length)).map((e) => '??${e.title}').join('\n');
+        body = '?箔?? ${min(3, shuffled.length)} ??霈?嗉?嚗n$picks';
       }
 
       await _plugin.zonedSchedule(
         101,
-        '隨手存 · 每日回顧',
+        '?冽?摮?繚 瘥?“',
         body,
         _nextTimeOfDay(dailyHour, dailyMinute),
         const NotificationDetails(
           android: AndroidNotificationDetails(
             'daily_review_channel',
-            '每日回顧提醒',
-            channelDescription: '每天定時挑選 1-3 則舊收藏提醒回顧',
+            '瘥?“??',
+            channelDescription: '瘥予摰?? 1-3 ???嗉????“',
             importance: Importance.defaultImportance,
             priority: Priority.defaultPriority,
             styleInformation: BigTextStyleInformation(''),
@@ -98,25 +98,25 @@ class ReminderService {
       );
     }
 
-    // 2. 久未看提醒：每週日 20:00 統計超過 N 天未讀項目 (ID: 102)
+    // 2. 銋????瘥望 20:00 蝯梯?頞? N 憭拇霈? (ID: 102)
     if (staleEnabled) {
       final cutoff = DateTime.now().subtract(Duration(days: staleDays));
       final staleCount =
           unreadItems.where((i) => i.createdAt.isBefore(cutoff)).length;
       final body = staleCount > 0
-          ? '目前有 $staleCount 則收藏超過 $staleDays 天還沒看，抽空滑卡片清理一下吧！'
-          : '太棒了！目前沒有超過 $staleDays 天未看的積壓收藏。';
+          ? '?桀???$staleCount ?????$staleDays 憭拚?瘝?嚗蝛箸??∠?皜?銝銝嚗?
+          : '憭芣?鈭??桀?瘝?頞? $staleDays 憭拇??蝛??嗉???;
 
       await _plugin.zonedSchedule(
         102,
-        '隨手存 · 久未看提醒',
+        '?冽?摮?繚 銋????,
         body,
         _nextWeekdayTime(DateTime.sunday, 20, 0),
         const NotificationDetails(
           android: AndroidNotificationDetails(
             'stale_reminder_channel',
-            '久未看提醒',
-            channelDescription: '每週統計超過指定天數未看的收藏',
+            '銋????,
+            channelDescription: '瘥梁絞閮???摰予?豢???嗉?',
             importance: Importance.defaultImportance,
             priority: Priority.defaultPriority,
           ),
@@ -128,23 +128,23 @@ class ReminderService {
       );
     }
 
-    // 3. 清單週末提醒：每週五 19:00 提醒 (ID: 103)
+    // 3. 皜?望??嚗??曹? 19:00 ?? (ID: 103)
     if (weekendEnabled) {
       final count = unreadItems.length;
       final body = count > 0
-          ? '週末到了！清單裡還有 $count 則未讀收藏（想去的店、想看的文章），趁週末來看看吧！'
-          : '週末愉快！打開隨手存整理這週的新靈感吧。';
+          ? '?望?唬?嚗??株ㄐ?? $count ?霈?嗉?嚗?餌?摨????嚗?頞望靘??嚗?
+          : '?望?翰嚗?????渡??梁??圈????;
 
       await _plugin.zonedSchedule(
         103,
-        '隨手存 · 週末清單提醒',
+        '?冽?摮?繚 ?望皜??',
         body,
         _nextWeekdayTime(DateTime.friday, 19, 0),
         const NotificationDetails(
           android: AndroidNotificationDetails(
             'weekend_reminder_channel',
-            '清單週末提醒',
-            channelDescription: '每週五 19:00 提醒查看週末清單',
+            '皜?望??',
+            channelDescription: '瘥曹? 19:00 ???亦??望皜',
             importance: Importance.defaultImportance,
             priority: Priority.defaultPriority,
           ),
@@ -157,31 +157,31 @@ class ReminderService {
     }
   }
 
-  /// 立即發送一則每日回顧測試通知
+  /// 蝡?潮????亙?憿扳葫閰阡
   static Future<void> sendInstantReviewPreview(AppDatabase db) async {
     await init();
     final allItems = await (db.select(db.savedItems)
           ..where((t) => t.isDeleted.equals(false) & t.isRead.equals(false)))
         .get();
 
-    String body = '目前沒有未讀收藏，快去新增幾筆連結或截圖吧！';
+    String body = '?桀?瘝??芾??嗉?嚗翰?餅憓嗾蝑????嚗?;
     if (allItems.isNotEmpty) {
       final shuffled = List.of(allItems)..shuffle(Random());
       final picks = shuffled
           .take(min(3, shuffled.length))
-          .map((e) => '• ${e.title}')
+          .map((e) => '??${e.title}')
           .join('\n');
-      body = '為你挑選 ${min(3, shuffled.length)} 則待讀收藏：\n$picks';
+      body = '?箔?? ${min(3, shuffled.length)} ??霈?嗉?嚗n$picks';
     }
 
     await _plugin.show(
       999,
-      '隨手存 · 每日回顧（立即預覽）',
+      '?冽?摮?繚 瘥?“嚗??喲?閬踝?',
       body,
       const NotificationDetails(
         android: AndroidNotificationDetails(
           'daily_review_channel',
-          '每日回顧提醒',
+          '瘥?“??',
           importance: Importance.high,
           priority: Priority.high,
           styleInformation: BigTextStyleInformation(''),
@@ -190,8 +190,8 @@ class ReminderService {
     );
   }
 
-  /// 掃描所有連結項目是否失效（404 / 410），並自動標記 #失效連結
-  static Future> runLinkHealthCheck(AppDatabase db) async {
+  /// ????????臬憭望?嚗?04 / 410嚗?銝西??閮?#憭望????
+  static Future<Map<String, int>> runLinkHealthCheck(AppDatabase db) async {
     final linkItems = await (db.select(db.savedItems)
           ..where((t) => t.isDeleted.equals(false) & t.itemType.equals('link')))
         .get();
@@ -209,7 +209,7 @@ class ReminderService {
       bool isDead = false;
 
       try {
-        // 針對 YouTube 影片使用 oEmbed 檢查是否已被下架或設為私人
+        // ?? YouTube 敶梁?雿輻 oEmbed 瑼Ｘ?臬撌脰◤銝?身?箇?鈭?
         if (rawUrl.contains('youtube.com/watch') || rawUrl.contains('youtu.be/')) {
           final oembed = Uri.parse(
               'https://www.youtube.com/oembed?url=${Uri.encodeComponent(rawUrl)}&format=json');
@@ -226,15 +226,15 @@ class ReminderService {
           }
         }
       } catch (_) {
-        // 逾時或防爬蟲不誤判為失效
+        // ?暹???祈銝炊?斤憭望?
       }
 
       if (isDead) {
         broken++;
         final currentTags = item.tags ?? '';
-        if (!currentTags.contains('失效連結')) {
+        if (!currentTags.contains('憭望????')) {
           final updatedTags =
-              currentTags.isEmpty ? '失效連結' : '$currentTags, 失效連結';
+              currentTags.isEmpty ? '憭望????' : '$currentTags, 憭望????';
           await (db.update(db.savedItems)..where((t) => t.id.equals(item.id)))
               .write(
             SavedItemsCompanion(
@@ -249,12 +249,12 @@ class ReminderService {
     if (broken > 0 && await isPermissionGranted()) {
       await _plugin.show(
         104,
-        '隨手存 · 連結健康檢查結果',
-        '共檢查 $checked 個連結，發現 $broken 個原作連結已失效（已自動標記 #失效連結）。',
+        '?冽?摮?繚 ????亙熒瑼Ｘ蝯?',
+        '?望炎??$checked ???嚗??$broken ??雿??撌脣仃??撌脰??閮?#憭望????嚗?,
         const NotificationDetails(
           android: AndroidNotificationDetails(
             'link_health_channel',
-            '連結健康檢查',
+            '????亙熒瑼Ｘ',
             importance: Importance.high,
             priority: Priority.high,
           ),
@@ -283,3 +283,4 @@ class ReminderService {
     return scheduled;
   }
 }
+
