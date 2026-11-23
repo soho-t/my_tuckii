@@ -13,7 +13,9 @@ main_activity_kt = """package __PKG__
 
 import android.app.StatusBarManager
 import android.appwidget.AppWidgetManager
+import android.content.ClipboardManager
 import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.graphics.drawable.Icon
 import android.os.Build
@@ -31,6 +33,9 @@ class MainActivity : FlutterActivity() {
 
     private var quickSaveChannel: MethodChannel? = null
     private var pendingQuickSave: Boolean = false
+    private var pendingQuickSaveText: String? = null
+    private var dartReady: Boolean = false
+    private var pendingClipResult: MethodChannel.Result? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -43,12 +48,55 @@ class MainActivity : FlutterActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         if (intent.action == ACTION_QUICK_SAVE) {
-            val ch = quickSaveChannel
-            if (ch != null) {
-                ch.invokeMethod("onQuickSaveTrigger", null)
-            } else {
-                pendingQuickSave = true
+            pendingQuickSave = true
+            if (hasWindowFocus()) {
+                window.decorView.postDelayed({ dispatchQuickSaveIfReady() }, 120)
             }
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            if (pendingQuickSave) {
+                window.decorView.postDelayed({ dispatchQuickSaveIfReady() }, 150)
+            }
+            val clipResult = pendingClipResult
+            if (clipResult != null) {
+                pendingClipResult = null
+                window.decorView.postDelayed({
+                    try {
+                        clipResult.success(readClipboardText())
+                    } catch (_: Exception) {}
+                }, 150)
+            }
+        }
+    }
+
+    private fun readClipboardText(): String {
+        return try {
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            val clip = cm.primaryClip
+            if (clip != null && clip.itemCount > 0) {
+                clip.getItemAt(0).coerceToText(this)?.toString()?.trim() ?: ""
+            } else {
+                ""
+            }
+        } catch (e: Exception) {
+            ""
+        }
+    }
+
+    private fun dispatchQuickSaveIfReady() {
+        if (!pendingQuickSave) return
+        val text = readClipboardText()
+        val ch = quickSaveChannel
+        if (dartReady && ch != null) {
+            pendingQuickSave = false
+            pendingQuickSaveText = null
+            ch.invokeMethod("onQuickSaveTrigger", text)
+        } else {
+            pendingQuickSaveText = text
         }
     }
 
@@ -58,9 +106,43 @@ class MainActivity : FlutterActivity() {
         quickSaveChannel?.setMethodCallHandler { call, result ->
             when (call.method) {
                 "consumePendingQuickSave" -> {
-                    val value = pendingQuickSave
-                    pendingQuickSave = false
-                    result.success(value)
+                    dartReady = true
+                    if (pendingQuickSave) {
+                        val cached = pendingQuickSaveText
+                        if (cached != null) {
+                            pendingQuickSave = false
+                            pendingQuickSaveText = null
+                            result.success(mapOf("pending" to true, "text" to cached))
+                        } else if (hasWindowFocus()) {
+                            pendingQuickSave = false
+                            result.success(mapOf("pending" to true, "text" to readClipboardText()))
+                        } else {
+                            // 視窗尚未取得焦點，交由 onWindowFocusChanged 接手觸發
+                            result.success(mapOf("pending" to false, "text" to ""))
+                        }
+                    } else {
+                        result.success(mapOf("pending" to false, "text" to ""))
+                    }
+                }
+                "readClipboardWhenFocused" -> {
+                    if (hasWindowFocus()) {
+                        window.decorView.postDelayed({
+                            try {
+                                result.success(readClipboardText())
+                            } catch (_: Exception) {}
+                        }, 120)
+                    } else {
+                        pendingClipResult = result
+                        window.decorView.postDelayed({
+                            val r = pendingClipResult
+                            if (r != null) {
+                                pendingClipResult = null
+                                try {
+                                    r.success(readClipboardText())
+                                } catch (_: Exception) {}
+                            }
+                        }, 1200)
+                    }
                 }
                 "showToastAndMinimize" -> {
                     val message = call.argument<String>("message") ?: ""
@@ -364,4 +446,4 @@ subprojects {
 except FileNotFoundError:
     pass
 
-print("Widget, TileService, MainActivity, and Gradle config applied successfully!")
+print("Focus-aware Clipboard, Widget, TileService, and Gradle config applied successfully!")

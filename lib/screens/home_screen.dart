@@ -46,7 +46,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   String? _updateStatusText;
 
   // 動態版本號與網頁 OG 封面圖快取
-  String _appVersion = '1.6.2';
+  String _appVersion = '1.6.3';
   Map<String, String> _linkCoverCache = {};
 
   // 外觀與收錄設定
@@ -180,27 +180,49 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void _setupQuickSaveChannel() {
     _quickSaveChannel.setMethodCallHandler((call) async {
       if (call.method == 'onQuickSaveTrigger') {
-        await _executeQuickClipboardSave(autoMinimize: true);
+        final nativeText = call.arguments?.toString();
+        await _executeQuickClipboardSave(
+          autoMinimize: true,
+          nativeText: nativeText,
+        );
       }
     });
 
-    _quickSaveChannel.invokeMethod<bool>('consumePendingQuickSave').then((pending) {
-      if (pending == true && mounted) {
+    _quickSaveChannel.invokeMethod('consumePendingQuickSave').then((res) {
+      if (!mounted) return;
+      if (res is Map && res['pending'] == true) {
+        final nativeText = res['text']?.toString();
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          _executeQuickClipboardSave(autoMinimize: true);
+          _executeQuickClipboardSave(
+            autoMinimize: true,
+            nativeText: nativeText,
+          );
         });
       }
     }).catchError((_) {});
   }
 
-  Future<void> _executeQuickClipboardSave({required bool autoMinimize}) async {
+  Future<void> _executeQuickClipboardSave({
+    required bool autoMinimize,
+    String? nativeText,
+  }) async {
     if (_isHandlingQuickSave) return;
     _isHandlingQuickSave = true;
 
     try {
-      await Future.delayed(const Duration(milliseconds: 280));
-      final clipData = await Clipboard.getData(Clipboard.kTextPlain);
-      final rawText = clipData?.text?.trim() ?? '';
+      String rawText = nativeText?.trim() ?? '';
+      if (rawText.isEmpty) {
+        try {
+          rawText = (await _quickSaveChannel
+                  .invokeMethod<String>('readClipboardWhenFocused'))
+              ?.trim() ?? '';
+        } catch (_) {}
+      }
+      if (rawText.isEmpty) {
+        await Future.delayed(const Duration(milliseconds: 250));
+        final clipData = await Clipboard.getData(Clipboard.kTextPlain);
+        rawText = clipData?.text?.trim() ?? '';
+      }
 
       if (rawText.isEmpty) {
         await _notifyNativeToast('剪貼簿目前沒有文字或連結', minimize: autoMinimize);
