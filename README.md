@@ -1,19 +1,22 @@
 ﻿# 🗂️ 隨手存 MyTuckii
 
-**隨手存 MyTuckii** 是一款注重隱私、零第三方伺服器的跨平台個人收藏與知識管理工具。支援隨時隨手存下網頁連結、螢幕截圖、文字筆記與各類本機文件，並透過個人 Google Drive 隱藏專屬空間（`appDataFolder`）在 Android 手機與電腦瀏覽器之間雙向同步。
+**隨手存 MyTuckii** 是一款注重隱私、零第三方伺服器的跨平台個人收藏與知識管理工具。你可以隨時存下網頁連結、螢幕截圖、文字筆記與各類本機文件，並透過個人 Google Drive 隱藏專屬空間（`appDataFolder`），在 Android 手機與電腦瀏覽器之間雙向同步。
+
+- 🌐 **電腦網頁伴侶版**：[https://my-tuckii.pages.dev](https://my-tuckii.pages.dev)
+- 🔒 **隱私權政策與合規揭露**：[https://my-tuckii.pages.dev/privacy.html](https://my-tuckii.pages.dev/privacy.html)
 
 ---
 
 ## ✨ 核心特色
 
 ### 🔒 隱私優先與零伺服器架構
-- **本機離線優先**：所有資料預設儲存於手機本機 SQLite 資料庫（Drift），無網路也能流暢檢索與閱讀。
-- **個人雲端專屬空間同步**：綁定個人 Google 帳號後，直接透過 Google Drive API 將資料與附件加密同步至你個人雲端硬碟的隱藏資料夾（`appDataFolder`），開發者與任何第三方皆無法存取。
-- **完整離線備份與書籤匯入**：支援一鍵打包所有資料與附件為離線 ZIP 備份檔，並可匯入 Chrome、Edge、Safari 匯出的 HTML 書籤。
+- **本機離線優先**：所有資料預設儲存於手機本機 SQLite 資料庫（Drift），沒有網路也能流暢檢索與閱讀。
+- **個人雲端專屬空間同步**：綁定個人 Google 帳號後，直接透過 Google Drive API 將資料與附件加密同步至個人雲端硬碟的隱藏資料夾（`appDataFolder`），開發者與第三方皆無法存取。
+- **完整離線備份與書籤匯入**：一鍵打包所有資料與附件為離線 ZIP 備份檔，並支援匯入 Chrome、Edge、Safari 匯出的 HTML 書籤。
 
 ### 💻 電腦網頁伴侶版（v1.9+）
-- **免安裝跨平台操作**：透過 Cloudflare Pages 託管純前端網頁伴侶版（`https://my-tuckii.pages.dev`），打開電腦瀏覽器並登入同一組 Google 帳號即可同步管理收藏庫。
-- **電腦與手機檔案雙向傳輸**：支援在電腦端直接選取並上傳 PDF、Word、Excel、圖片及各類檔案，也能直接在電腦瀏覽器直接開啟或下載手機端上傳的截圖與文件。
+- **免安裝跨平台操作**：透過 Cloudflare Pages 免費託管純前端網頁伴侶版，打開電腦瀏覽器並登入同一組 Google 帳號即可同步管理收藏庫。
+- **電腦與手機檔案雙向傳輸**：支援在電腦端選取並上傳 PDF、Word、Excel、圖片及各類檔案，也能在電腦瀏覽器直接開啟或下載手機端上傳的截圖與文件。
 - **資料夾同步管理**：支援在網頁端與手機端建立收藏夾並即時同步歸類。
 
 ### 🤖 多模態 AI 智慧整理（Gemini 2.5 Flash，v1.7+）
@@ -22,7 +25,7 @@
 - **3 點重點懶人包**：編輯收藏時可一鍵擷取網頁正文或截圖內容，提煉 3 點精簡摘要填入備註欄。（採用 BYOK 模式，填入個人免費 Gemini API Key 即可使用）
 
 ### 🗂️ 收藏庫維護與防誤刪（v1.8+）
-- **回收桶與誤刪還原**：刪除項目會先移入回收桶保留，支援單筆／全部一鍵還原，或永久清空釋放手機空間。
+- **回收桶與誤刪還原**：刪除的項目會先移入回收桶保留，支援單筆／全部一鍵還原，或永久清空釋放手機空間。
 - **重複連結偵測與智慧合併**：自動忽略網址中的追蹤參數（`utm_*`、`fbclid`、`igshid`、`si` 等）並正規化 YouTube 短網址，合併重複項目並整併雙方標籤與備註。
 - **標籤總覽與批次管理**：提供標籤雲檢視所有標籤與收藏筆數，支援批次重新命名、合併同義標籤或移除廢棄標籤。
 
@@ -39,11 +42,11 @@
 - **v1.4 – v1.6（雲端同步、快速收錄與智慧提醒）**：串接個人 Google Drive 隱藏專屬空間（`appDataFolder`）跨裝置加密同步；新增剪貼簿自動偵測、通知欄常駐快存、Android 快速設定磚與桌面小工具；加入網頁增強預覽（自動抓取標題與封面圖）、無障礙高對比模式、閃卡式「專注複習模式」，以及每日回顧、久未看提醒、週末提醒與每週連結健康度檢查。
 - **v1.7（多模態 AI 智慧整理）**：整合 Gemini 2.5 Flash（BYOK 個人金鑰），支援螢幕截圖 AI 識圖自動打標與摘要、自然語言口語智慧搜尋，以及編輯面板一鍵產生 3 點重點懶人包摘要。
 - **v1.8（收藏庫維護與防誤刪工具）**：新增回收桶與單筆／全部誤刪還原；加入追蹤參數正規化（忽略 `utm_*`、`fbclid` 等）與重複連結智慧合併；提供標籤總覽雲與批次重新命名、合併同義標籤管理。
-- **v1.9（電腦網頁伴侶版與跨裝置檔案傳輸）**：推出免安裝純前端電腦網頁伴侶版（部署於 Cloudflare Pages `https://my-tuckii.pages.dev`），直接讀寫個人 Google Drive `appDataFolder`；支援電腦與手機雙向檔案／圖片上傳下載、網頁端新增收藏夾，並於手機設定頁內建四步驟使用指南。
+- **v1.9（電腦網頁伴侶版與公開隱私權合規）**：在主倉庫維持私有的前提下，透過 Cloudflare Pages 推出免安裝電腦網頁伴侶版（`https://my-tuckii.pages.dev`），支援電腦與手機雙向檔案／圖片傳輸與網頁端新增收藏夾；同步上線公開隱私權政策與 Google API 有限使用合規揭露頁面（`https://my-tuckii.pages.dev/privacy.html`），並將 App 內網頁指南與隱私權入口全面切換至正式公開網址。
 
 ### v2.0（規劃中）
-- **Google Play 商店正式上架**：完成商店上架政策適配（移除外部 APK 自我更新檢查機制）與穩定性全面調校，改由 Google Play 派送版本更新。
-- **公開隱私權政策與合規揭露**：提供公開可存取的隱私權政策網頁，完整說明本機儲存、Google Drive `appDataFolder` 同步與個人 Gemini API Key 權限範圍。
+- **Google Play 商店正式上架**：完成商店政策適配（移除外部 APK 自我更新檢查機制）與穩定性調校，改以 `.aab` 打包並由 Google Play 派送版本更新。
+- **Google OAuth 品牌正式驗證**：透過 Search Console 完成網域所有權驗證並送交 Google 品牌審核，切換為正式發布狀態，開放大眾免警告畫面直接登入同步。
 - **串接 Google Play 單次贊助內購**：設定頁「請作者喝杯咖啡」正式接入 Google Play 單次消耗型內購通道（小杯 $30 / 中杯 $90 / 大杯 $150），核心功能維持全數免費開放。
 
 ---
@@ -51,5 +54,5 @@
 ## 🛠️ 技術架構
 
 - **Android 應用程式**：Flutter / Dart、Drift（SQLite）、Google Sign-In、Google Drive API v3（`drive.appdata`）
-- **電腦網頁伴侶版**：原生 HTML5 / CSS3 / JavaScript、Google Identity Services（GIS）、Google Drive REST API v3（託管於 Cloudflare Pages）
+- **電腦網頁伴侶版與合規頁面**：原生 HTML5 / CSS3 / JavaScript、Google Identity Services（GIS）、Google Drive REST API v3（託管於 Cloudflare Pages）
 - **AI 整合**：Google Gemini 2.5 Flash REST API
