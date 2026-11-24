@@ -151,6 +151,13 @@
       flex-wrap: wrap;
     }
     .toolbar input { flex: 1; min-width: 240px; }
+    .inline-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .inline-row select { flex: 1; }
+    .inline-row button { white-space: nowrap; padding: 10px 12px; }
     .chips {
       display: flex;
       gap: 8px;
@@ -298,7 +305,7 @@
 <body>
   <header>
     <div class="brand">
-      🗂️ 隨手存 MyTuckii <span class="badge">Web 伴侶版 v1.9.2</span>
+      🗂️ 隨手存 MyTuckii <span class="badge">Web 伴侶版 v1.9.3</span>
     </div>
     <div class="header-actions" id="headerActions">
       <button id="btnAdd" class="primary hidden" onclick="openEditor()">＋ 新增收藏</button>
@@ -345,6 +352,7 @@
           <option value="all">所有資料夾</option>
           <option value="none">未分類</option>
         </select>
+        <button type="button" onclick="createNewCollection('filter')">📁＋ 新增收藏夾</button>
       </div>
 
       <div class="chips" id="typeChips">
@@ -396,9 +404,12 @@
       </div>
       <div class="form-group">
         <label for="fieldCollection">收藏夾</label>
-        <select id="fieldCollection">
-          <option value="">未分類</option>
-        </select>
+        <div class="inline-row">
+          <select id="fieldCollection">
+            <option value="">未分類</option>
+          </select>
+          <button type="button" onclick="createNewCollection('editor')">＋ 新增</button>
+        </div>
       </div>
       <div class="form-group">
         <label for="fieldNote">備註／筆記內文</label>
@@ -630,7 +641,6 @@
           if (f.name) driveFilesByName[f.name] = f;
         });
 
-        // 清理舊版誤建的 mytuckii_sync.json（若同時存在）
         const legacyFile = driveFilesByName['mytuckii_sync.json'];
         const indexFile = driveFilesByName[SYNC_INDEX_NAME];
 
@@ -681,6 +691,7 @@
       const filterEl = document.getElementById('collectionFilter');
       const fieldEl = document.getElementById('fieldCollection');
       const prevFilter = filterEl.value;
+      const prevField = fieldEl.value;
 
       filterEl.innerHTML = '<option value="all">所有資料夾</option><option value="none">未分類</option>';
       fieldEl.innerHTML = '<option value="">未分類</option>';
@@ -697,6 +708,58 @@
 
       if ([...filterEl.options].some(o => o.value === prevFilter)) {
         filterEl.value = prevFilter;
+      }
+      if ([...fieldEl.options].some(o => o.value === prevField)) {
+        fieldEl.value = prevField;
+      }
+    }
+
+    async function createNewCollection(source) {
+      const name = prompt('請輸入新收藏夾名稱（例如：工作文件、旅遊靈感）：');
+      if (!name) return;
+      const trimmed = name.trim();
+      if (!trimmed) return;
+
+      const existing = (rawPayload.collections || []).find(
+        c => !c.isDeleted && (c.name || '').trim() === trimmed
+      );
+
+      if (existing) {
+        populateCollections();
+        if (source === 'editor') {
+          document.getElementById('fieldCollection').value = existing.syncUuid;
+        } else {
+          document.getElementById('collectionFilter').value = existing.syncUuid;
+          renderItems();
+        }
+        showToast(`已選取現有收藏夾「${existing.name}」`);
+        return;
+      }
+
+      const now = new Date().toISOString();
+      const newUuid = crypto.randomUUID();
+      rawPayload.collections.push({
+        syncUuid: newUuid,
+        name: trimmed,
+        iconName: 'folder',
+        createdAt: now,
+        updatedAt: now,
+        isDeleted: false
+      });
+
+      populateCollections();
+      if (source === 'editor') {
+        document.getElementById('fieldCollection').value = newUuid;
+      } else {
+        document.getElementById('collectionFilter').value = newUuid;
+        renderItems();
+      }
+
+      try {
+        await uploadToDrive();
+        showToast(`已建立收藏夾「${trimmed}」並同步至雲端`);
+      } catch (err) {
+        alert('建立收藏夾同步失敗：' + err.message);
       }
     }
 
@@ -858,6 +921,8 @@
       document.getElementById('selectedFileInfo').textContent = '';
       document.getElementById('editIndex').value = String(index);
 
+      const currentFilterCol = document.getElementById('collectionFilter').value;
+
       if (index === -1) {
         document.getElementById('editorTitle').textContent = '新增收藏';
         document.getElementById('fileDropBox').classList.remove('hidden');
@@ -865,7 +930,8 @@
         document.getElementById('fieldTitle').value = '';
         document.getElementById('fieldUrl').value = '';
         document.getElementById('fieldTags').value = '';
-        document.getElementById('fieldCollection').value = '';
+        document.getElementById('fieldCollection').value =
+          (currentFilterCol !== 'all' && currentFilterCol !== 'none') ? currentFilterCol : '';
         document.getElementById('fieldNote').value = '';
       } else {
         const raw = rawPayload.items[index];
@@ -1041,6 +1107,7 @@
       const sample = (rawPayload.items || []).slice(0, 2);
       alert(
         `索引檔名：${SYNC_INDEX_NAME}\n` +
+        `資料夾數：${(rawPayload.collections || []).filter(c => !c.isDeleted).length} 個\n` +
         `總項目數：${(rawPayload.items || []).length} 筆\n` +
         `雲端附件數：${Object.keys(driveFilesByName).filter(n => !n.endsWith('.json')).length} 個\n\n` +
         `前 2 筆範例：\n` + JSON.stringify(sample, null, 2)
