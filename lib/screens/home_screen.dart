@@ -1,4 +1,4 @@
-import 'dart:convert';
+﻿import 'dart:convert';
 import 'dart:io';
 import 'package:drift/drift.dart' as drift;
 import 'package:file_picker/file_picker.dart';
@@ -2811,9 +2811,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             const Divider(height: 8),
                             ListTile(
                               contentPadding: EdgeInsets.zero,
-                              title: const Text('隱私權政策與專案首頁'),
+                              title: const Text('隱私權政策與合規說明'),
                               trailing: const Icon(Icons.open_in_new, size: 18),
-                              onTap: () => _openExternalUrl('https://github.com/soho-t/my_tuckii'),
+                              onTap: () => _openExternalUrl('https://my-tuckii.pages.dev/privacy.html'),
                             ),
                           ],
                         ),
@@ -2856,7 +2856,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   void _showWebCompanionGuideSheet() {
-    const webUrl = 'https://soho-t.github.io/my_tuckii/';
+    const webUrl = 'https://my-tuckii.pages.dev';
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
